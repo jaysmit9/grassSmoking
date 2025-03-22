@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    
+        <script>
+            L_NO_TOUCH = false;
+            L_DISABLE_3D = false;
+        </script>
+    
+    <style>html, body {width: 100%;height: 100%;margin: 0;padding: 0;}</style>
+    <style>#map {position:absolute;top:0;bottom:0;right:0;left:0;}</style>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_d40690ac805dbb17fe1b3921c103ac60 {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+        
+</head>
+<body>
+    
+    
+        <div id="info-panel" style="
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            max-width: 300px;
+            max-height: 80%;
+            overflow-y: auto;
+        ">
+            <h4 style="margin-top: 0;">Waypoint Information</h4>
+            <div id="waypoint-info">Loading...</div>
+        </div>
+        
+    
+        <script>
+        var roverMarker = null;
+        var headingLine = null;
+        
+        // Haversine formula to calculate distance between points
+        function haversineDistance(lat1, lon1, lat2, lon2) {
+            function toRad(x) {
+                return x * Math.PI / 180;
+            }
+            
+            var R = 6371; // Earth's radius in km
+            var dLat = toRad(lat2 - lat1);
+            var dLon = toRad(lat2 - lat1);
+            var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
+                    Math.sin(dLon/2) * Math.sin(dLon/2);
+            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            var d = R * c;
+            return d * 1000; // Convert to meters
+        }
+        
+        // Calculate bearing between two points
+        function calculateBearing(lat1, lon1, lat2, lon2) {
+            function toRad(x) {
+                return x * Math.PI / 180;
+            }
+            
+            // Convert to radians
+            var lat1Rad = toRad(lat1);
+            var lon1Rad = toRad(lon1);
+            var lat2Rad = toRad(lat2);
+            var lon2Rad = toRad(lon2);
+            
+            // Calculate bearing (EXACT SAME ALGORITHM as GPS monitor)
+            var dlon = lon2Rad - lon1Rad;
+            var y = Math.sin(dlon) * Math.cos(lat2Rad);
+            var x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - 
+                    Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dlon);
+            var bearing = Math.atan2(y, x);
+            
+            // Convert to degrees and normalize to 0-360
+            var bearingDeg = bearing * 180 / Math.PI;
+            bearingDeg = (bearingDeg + 360) % 360;
+            
+            return bearingDeg;
+        }
+        
+        // Calculate relative bearing (difference from current heading)
+        function calculateRelativeBearing(currentHeading, targetBearing) {
+            var diff = targetBearing - currentHeading;
+            // Normalize to -180 to 180
+            return ((diff + 180) % 360) - 180;
+        }
+        
+        // Waypoint coordinates
+        var waypoints = [[-77.86700018666667, 34.15195716], [-77.866943845, 34.152101085], [-77.866835825, 34.15205685], [-77.86685284333333, 34.15195394]];
+        
+        function updateInfoPanel(roverLat, roverLon, heading, targetIdx) {
+            var infoHtml = '<table style="width:100%"><tr><th>WP</th><th>Dist (m)</th><th>Heading</th><th>Turn</th></tr>';
+            
+            waypoints.forEach(function(waypoint, idx) {
+                var wpLat = waypoint[0];
+                var wpLon = waypoint[1];
+                
+                // Calculate distance
+                var distance = haversineDistance(roverLat, roverLon, wpLat, wpLon);
+                
+                // Calculate bearing to waypoint
+                var bearing = calculateBearing(roverLat, roverLon, wpLat, wpLon);
+                
+                // Calculate relative bearing (how much to turn)
+                var relativeBearing = calculateRelativeBearing(heading, bearing);
+                
+                // Determine turn direction
+                var turnDirection = relativeBearing > 0 ? "→" : relativeBearing < 0 ? "←" : "↑";
+                
+                // Highlight current target waypoint
+                var style = (idx === targetIdx) ? 'background-color: #ffff99;' : '';
+                
+                infoHtml += '<tr style="' + style + '">' +
+                           '<td>' + idx + '</td>' +
+                           '<td>' + distance.toFixed(1) + '</td>' +
+                           '<td>' + bearing.toFixed(1) + '°</td>' +
+                           '<td>' + turnDirection + ' ' + Math.abs(relativeBearing).toFixed(1) + '°</td>' +
+                           '</tr>';
+            });
+            
+            infoHtml += '</table>';
+            document.getElementById('waypoint-info').innerHTML = infoHtml;
+        }
+        
+        function updatePosition() {
+            fetch('current_position.json')
+                .then(response => response.json())
+                .then(data => {
+                    var latlng = [data.lat, data.lon];
+                    
+                    // Update or create rover marker
+                    if (!roverMarker) {
+                        roverMarker = L.marker(latlng, {
+                            icon: L.divIcon({
+                                html: '<div style="color: white; background-color: red; width: 20px; height: 20px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transform: rotate(' + (data.heading - 90) + 'deg)">⬆</div>',
+                                className: 'rover-marker',
+                                iconSize: [20, 20]
+                            })
+                        }).addTo(map);
+                    } else {
+                        roverMarker.setLatLng(latlng);
+                        roverMarker.setIcon(L.divIcon({
+                            html: '<div style="color: white; background-color: red; width: 20px; height: 20px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transform: rotate(' + (data.heading - 90) + 'deg)">⬆</div>',
+                            className: 'rover-marker',
+                            iconSize: [20, 20]
+                        }));
+                    }
+                    
+                    roverMarker.bindPopup("Current Heading: " + data.heading.toFixed(1) + "°<br>Target: WP " + data.target_idx);
+                    
+                    // Update info panel with distances and headings
+                    updateInfoPanel(data.lat, data.lon, data.heading, data.target_idx);
+                    
+                    // Draw heading line
+                    if (headingLine) {
+                        map.removeLayer(headingLine);
+                    }
+                    
+                    // Convert heading to radians and calculate end point
+                    var headingRad = data.heading * Math.PI / 180;
+                    var length = 0.00005; // adjust for visible line length
+
+                    // Correct calculation for heading line endpoint
+                    // Note: Longitude changes with cosine of heading, latitude with sine
+                    var endLat = data.lat + Math.cos(headingRad) * length;
+                    var endLng = data.lon + Math.sin(headingRad) * length;
+
+                    headingLine = L.polyline([latlng, [endLat, endLng]], {
+                        color: 'red',
+                        weight: 2
+                    }).addTo(map);
+                    
+                    // Update every 0.5 seconds
+                    setTimeout(updatePosition, 500);
+                })
+                .catch(error => {
+                    console.error('Error fetching position:', error);
+                    setTimeout(updatePosition, 2000); // Retry after 2 seconds on error
+                });
+        }
+        
+        // Start position updates when the map is ready
+        map.whenReady(function() {
+            setTimeout(updatePosition, 100);
+        });
+        </script>
+        
+    
+            <div class="folium-map" id="map_d40690ac805dbb17fe1b3921c103ac60" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_d40690ac805dbb17fe1b3921c103ac60 = L.map(
+                "map_d40690ac805dbb17fe1b3921c103ac60",
+                {
+                    center: [-77.866908175, 34.15201725875],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 20,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_6fb5787b16789b425d392da65e4191b6 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_6fb5787b16789b425d392da65e4191b6.addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+        
+    
+            var marker_35dee9d3c32b6df1690ff93f55a5489d = L.marker(
+                [-77.86700018666667, 34.15195716],
+                {
+}
+            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+        
+    
+            var icon_175b21bb0d29ca576f5573e4e1729eea = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_35dee9d3c32b6df1690ff93f55a5489d.setIcon(icon_175b21bb0d29ca576f5573e4e1729eea);
+        
+    
+        var popup_6a7f80fbf91a1058b414dc0553102d7a = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_a763d88e8c07692509c8f818cc37d27d = $(`<div id="html_a763d88e8c07692509c8f818cc37d27d" style="width: 100.0%; height: 100.0%;">Waypoint 0</div>`)[0];
+                popup_6a7f80fbf91a1058b414dc0553102d7a.setContent(html_a763d88e8c07692509c8f818cc37d27d);
+            
+        
+
+        marker_35dee9d3c32b6df1690ff93f55a5489d.bindPopup(popup_6a7f80fbf91a1058b414dc0553102d7a)
+        ;
+
+        
+    
+    
+            var marker_3c12884dd0729e5116e431e4143be1e5 = L.marker(
+                [-77.866943845, 34.152101085],
+                {
+}
+            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+        
+    
+            var icon_df8f2837027996ef86330e5e86de406d = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_3c12884dd0729e5116e431e4143be1e5.setIcon(icon_df8f2837027996ef86330e5e86de406d);
+        
+    
+        var popup_9bc2c4207af36c9bd9f920b47f5ebe58 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_9ca615b3cf98f825158d6ecf3a488932 = $(`<div id="html_9ca615b3cf98f825158d6ecf3a488932" style="width: 100.0%; height: 100.0%;">Waypoint 1</div>`)[0];
+                popup_9bc2c4207af36c9bd9f920b47f5ebe58.setContent(html_9ca615b3cf98f825158d6ecf3a488932);
+            
+        
+
+        marker_3c12884dd0729e5116e431e4143be1e5.bindPopup(popup_9bc2c4207af36c9bd9f920b47f5ebe58)
+        ;
+
+        
+    
+    
+            var marker_59fd90d764d11dd6b4ba65d86236aa62 = L.marker(
+                [-77.866835825, 34.15205685],
+                {
+}
+            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+        
+    
+            var icon_e7c02a4e29098a134a3b8e0b10640368 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_59fd90d764d11dd6b4ba65d86236aa62.setIcon(icon_e7c02a4e29098a134a3b8e0b10640368);
+        
+    
+        var popup_267d90066737993e6c9ca1f66c04b604 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_e1d49a2833f2080696864e05adbe7343 = $(`<div id="html_e1d49a2833f2080696864e05adbe7343" style="width: 100.0%; height: 100.0%;">Waypoint 2</div>`)[0];
+                popup_267d90066737993e6c9ca1f66c04b604.setContent(html_e1d49a2833f2080696864e05adbe7343);
+            
+        
+
+        marker_59fd90d764d11dd6b4ba65d86236aa62.bindPopup(popup_267d90066737993e6c9ca1f66c04b604)
+        ;
+
+        
+    
+    
+            var marker_2131e3e2eb57f44993ef47e45cfee362 = L.marker(
+                [-77.86685284333333, 34.15195394],
+                {
+}
+            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+        
+    
+            var icon_eeb0badb2faa8b28f354055a34e1eadf = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_2131e3e2eb57f44993ef47e45cfee362.setIcon(icon_eeb0badb2faa8b28f354055a34e1eadf);
+        
+    
+        var popup_ce632409e8950a583af4ae0ffce2f674 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_659874f8ea9bcdee4b24e4efde2d1cfd = $(`<div id="html_659874f8ea9bcdee4b24e4efde2d1cfd" style="width: 100.0%; height: 100.0%;">Waypoint 3</div>`)[0];
+                popup_ce632409e8950a583af4ae0ffce2f674.setContent(html_659874f8ea9bcdee4b24e4efde2d1cfd);
+            
+        
+
+        marker_2131e3e2eb57f44993ef47e45cfee362.bindPopup(popup_ce632409e8950a583af4ae0ffce2f674)
+        ;
+
+        
+    
+    
+            var poly_line_4c46bc2201df1e8567a9e6b712da1e89 = L.polyline(
+                [[-77.86700018666667, 34.15195716], [-77.866943845, 34.152101085], [-77.866835825, 34.15205685], [-77.86685284333333, 34.15195394]],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": false, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "noClip": false, "opacity": 0.8, "smoothFactor": 1.0, "stroke": true, "weight": 2.5}
+            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+        
+    
+            var marker_fde0618bcde4123124b731df6363a7d0 = L.marker(
+                [-77.86700018666667, 34.15195716],
+                {
+}
+            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+        
+    
+            var icon_efc21deaf80607eaca720493aff31b84 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "red",
+  "iconColor": "white",
+  "icon": "car",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_fde0618bcde4123124b731df6363a7d0.setIcon(icon_efc21deaf80607eaca720493aff31b84);
+        
+    
+        var popup_082cd2f56384f49a77c93d674c6cf7ba = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_3b68a2fa69a45d15176ad1d3b043ccc5 = $(`<div id="html_3b68a2fa69a45d15176ad1d3b043ccc5" style="width: 100.0%; height: 100.0%;">Rover</div>`)[0];
+                popup_082cd2f56384f49a77c93d674c6cf7ba.setContent(html_3b68a2fa69a45d15176ad1d3b043ccc5);
+            
+        
+
+        marker_fde0618bcde4123124b731df6363a7d0.bindPopup(popup_082cd2f56384f49a77c93d674c6cf7ba)
+        ;
+
+        
+    
+</script>
+</html>

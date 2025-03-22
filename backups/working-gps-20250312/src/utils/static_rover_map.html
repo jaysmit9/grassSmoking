@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="refresh" content="5">
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    
+        <script>
+            L_NO_TOUCH = false;
+            L_DISABLE_3D = false;
+        </script>
+    
+    <style>html, body {width: 100%;height: 100%;margin: 0;padding: 0;}</style>
+    <style>#map {position:absolute;top:0;bottom:0;right:0;left:0;}</style>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_7e95cc312605ce70b67fac49015ec643 {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+        
+</head>
+<body>
+    
+    
+    <div style="
+        position: absolute; 
+        top: 10px;
+        right: 10px;
+        z-index: 1000;
+        background-color: white;
+        padding: 10px;
+        border-radius: 5px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        font-family: Arial;
+        max-width: 300px;
+        max-height: 80%;
+        overflow-y: auto;
+    ">
+        <h3 style="margin-top: 0;">Waypoint Information</h3>
+        <div>Current Position: (34.1519411, -77.8669087)</div>
+        <div>Current Heading: 307.7°</div>
+        <div style="margin-top: 10px;">
+            <table style='width:100%; border-collapse: collapse;'><tr style='background-color:#f2f2f2'><th>WP</th><th>Distance (m)</th><th>Bearing</th><th>Turn</th></tr><tr style='border-bottom:1px solid #ddd;'><td>0</td><td>8.6</td><td>282.0°</td><td>← 25.8°</td></tr><tr style='border-bottom:1px solid #ddd;'><td>1</td><td>18.0</td><td>349.7°</td><td>→ 42.0°</td></tr><tr style='border-bottom:1px solid #ddd;'><td>2</td><td>14.5</td><td>27.5°</td><td>→ 79.8°</td></tr><tr ><td>3</td><td>5.3</td><td>74.5°</td><td>→ 126.7°</td></tr></table>
+        </div>
+    </div>
+    
+    
+            <div class="folium-map" id="map_7e95cc312605ce70b67fac49015ec643" ></div>
+        
+<div style="position:fixed; bottom:10px; left:10px; background:rgba(255,255,255,0.7); padding:5px; border-radius:5px;">Auto-refreshing every 5 seconds</div>
+</body>
+<script>
+    
+    
+            var map_7e95cc312605ce70b67fac49015ec643 = L.map(
+                "map_7e95cc312605ce70b67fac49015ec643",
+                {
+                    center: [34.15200202733333, -77.866908288],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 19,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_2f157ea73da22f979f9ca97ddfafb736 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_2f157ea73da22f979f9ca97ddfafb736.addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            var marker_bda2dfe84cdb211f8a201f86965aca0c = L.marker(
+                [34.151941101666665, -77.86690874],
+                {
+}
+            ).addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            var icon_8f5ec771fcbace79b6c6172ad7901187 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "red",
+  "iconColor": "white",
+  "icon": "crosshairs",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_bda2dfe84cdb211f8a201f86965aca0c.setIcon(icon_8f5ec771fcbace79b6c6172ad7901187);
+        
+    
+        var popup_06577545a39115b6f4bd181a4ce80398 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_1001af2c82aea216fc4cb2f1abd24283 = $(`<div id="html_1001af2c82aea216fc4cb2f1abd24283" style="width: 100.0%; height: 100.0%;">Current Position</div>`)[0];
+                popup_06577545a39115b6f4bd181a4ce80398.setContent(html_1001af2c82aea216fc4cb2f1abd24283);
+            
+        
+
+        marker_bda2dfe84cdb211f8a201f86965aca0c.bindPopup(popup_06577545a39115b6f4bd181a4ce80398)
+        ;
+
+        
+    
+    
+            marker_bda2dfe84cdb211f8a201f86965aca0c.bindTooltip(
+                `<div>
+                     Current Position
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_240eae41c965e6778a7f66cb706a3fc6 = L.marker(
+                [34.15195716, -77.86700018666667],
+                {
+}
+            ).addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            var icon_590095d477b0751df0555af1deff0a23 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_240eae41c965e6778a7f66cb706a3fc6.setIcon(icon_590095d477b0751df0555af1deff0a23);
+        
+    
+        var popup_b5358a9faa416113137b41ed06e33353 = L.popup({
+  "maxWidth": 200,
+});
+
+        
+            
+                var html_f5bd31a1a97a38a5ae123531be058a7b = $(`<div id="html_f5bd31a1a97a38a5ae123531be058a7b" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 150px;">             <b>Waypoint 0</b><br>             Distance: 8.6 m<br>             Bearing: 282.0°<br>             ← 25.8°         </div>         </div>`)[0];
+                popup_b5358a9faa416113137b41ed06e33353.setContent(html_f5bd31a1a97a38a5ae123531be058a7b);
+            
+        
+
+        marker_240eae41c965e6778a7f66cb706a3fc6.bindPopup(popup_b5358a9faa416113137b41ed06e33353)
+        ;
+
+        
+    
+    
+            marker_240eae41c965e6778a7f66cb706a3fc6.bindTooltip(
+                `<div>
+                     Waypoint 0
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_6569a248cbf90b6aa87d2e9fbdb52c93 = L.marker(
+                [34.152101085, -77.866943845],
+                {
+}
+            ).addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            var icon_32a287c9990bb9d9ac8daeacd18bdb26 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_6569a248cbf90b6aa87d2e9fbdb52c93.setIcon(icon_32a287c9990bb9d9ac8daeacd18bdb26);
+        
+    
+        var popup_5ec25632c0debf2ba332360ad3b8ceb2 = L.popup({
+  "maxWidth": 200,
+});
+
+        
+            
+                var html_a3f8f8f4af116b623ba0a971a25b3d31 = $(`<div id="html_a3f8f8f4af116b623ba0a971a25b3d31" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 150px;">             <b>Waypoint 1</b><br>             Distance: 18.0 m<br>             Bearing: 349.7°<br>             → 42.0°         </div>         </div>`)[0];
+                popup_5ec25632c0debf2ba332360ad3b8ceb2.setContent(html_a3f8f8f4af116b623ba0a971a25b3d31);
+            
+        
+
+        marker_6569a248cbf90b6aa87d2e9fbdb52c93.bindPopup(popup_5ec25632c0debf2ba332360ad3b8ceb2)
+        ;
+
+        
+    
+    
+            marker_6569a248cbf90b6aa87d2e9fbdb52c93.bindTooltip(
+                `<div>
+                     Waypoint 1
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_df4871702f8384b129abd547764565d9 = L.marker(
+                [34.15205685, -77.866835825],
+                {
+}
+            ).addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            var icon_a3e16f35542824a3caf5f1d5dc4dec4e = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_df4871702f8384b129abd547764565d9.setIcon(icon_a3e16f35542824a3caf5f1d5dc4dec4e);
+        
+    
+        var popup_3a2abfd6170b0556edba5af8e951264a = L.popup({
+  "maxWidth": 200,
+});
+
+        
+            
+                var html_c0994a292bbc4f66f3e41f51a1259350 = $(`<div id="html_c0994a292bbc4f66f3e41f51a1259350" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 150px;">             <b>Waypoint 2</b><br>             Distance: 14.5 m<br>             Bearing: 27.5°<br>             → 79.8°         </div>         </div>`)[0];
+                popup_3a2abfd6170b0556edba5af8e951264a.setContent(html_c0994a292bbc4f66f3e41f51a1259350);
+            
+        
+
+        marker_df4871702f8384b129abd547764565d9.bindPopup(popup_3a2abfd6170b0556edba5af8e951264a)
+        ;
+
+        
+    
+    
+            marker_df4871702f8384b129abd547764565d9.bindTooltip(
+                `<div>
+                     Waypoint 2
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_edf70d092e58bc7eeed28c433483f4a8 = L.marker(
+                [34.15195394, -77.86685284333333],
+                {
+}
+            ).addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            var icon_0ca8bc84626300df1044cb494da140af = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "fa",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_edf70d092e58bc7eeed28c433483f4a8.setIcon(icon_0ca8bc84626300df1044cb494da140af);
+        
+    
+        var popup_399ed9db3b579f6a53bd1a09eba7fdcb = L.popup({
+  "maxWidth": 200,
+});
+
+        
+            
+                var html_4ee63e9b484e90d54a8f8f59cd0cb1a8 = $(`<div id="html_4ee63e9b484e90d54a8f8f59cd0cb1a8" style="width: 100.0%; height: 100.0%;">         <div style="font-family: Arial; min-width: 150px;">             <b>Waypoint 3</b><br>             Distance: 5.3 m<br>             Bearing: 74.5°<br>             → 126.7°         </div>         </div>`)[0];
+                popup_399ed9db3b579f6a53bd1a09eba7fdcb.setContent(html_4ee63e9b484e90d54a8f8f59cd0cb1a8);
+            
+        
+
+        marker_edf70d092e58bc7eeed28c433483f4a8.bindPopup(popup_399ed9db3b579f6a53bd1a09eba7fdcb)
+        ;
+
+        
+    
+    
+            marker_edf70d092e58bc7eeed28c433483f4a8.bindTooltip(
+                `<div>
+                     Waypoint 3
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var poly_line_fe4ada2b0db4b4974c39c1f6b0319850 = L.polyline(
+                [[34.15195716, -77.86700018666667], [34.152101085, -77.866943845], [34.15205685, -77.866835825], [34.15195394, -77.86685284333333]],
+                {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": false, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "noClip": false, "opacity": 0.8, "smoothFactor": 1.0, "stroke": true, "weight": 2.5}
+            ).addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            var poly_line_d96c519ad13d383394a88a1466a3b440 = L.polyline(
+                [[34.151941101666665, -77.86690874], [34.15206352910932, -77.86706689031232]],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": false, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "noClip": false, "opacity": 1.0, "smoothFactor": 1.0, "stroke": true, "weight": 3}
+            ).addTo(map_7e95cc312605ce70b67fac49015ec643);
+        
+    
+            poly_line_d96c519ad13d383394a88a1466a3b440.bindTooltip(
+                `<div>
+                     Heading: 307.7°
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+</script>
+</html>

@@ -1,0 +1,23 @@
+# Logs
+*.log
+logs/
+
+# Data files
+*.csv
+*.dat
+*.bag
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.class
+
+# Environment
+.env
+.venv
+venv/
+ENV/
+
+# Large Files
+*.so
+*.weights

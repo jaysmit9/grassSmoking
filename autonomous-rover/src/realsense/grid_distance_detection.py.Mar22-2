@@ -1,0 +1,281 @@
+import pyrealsense2 as rs
+import numpy as np
+import cv2
+import time
+import traceback
+import math
+
+def calculate_angle(x, width, hfov=66):
+    """Calculate angle from center of image"""
+    normalized_pos = (x - width/2) / (width/2)
+    return normalized_pos * (hfov/2)
+
+def create_distance_grid_visualization(depth_frame, depth_scale, grid_size=10, highlight_threshold=3.0, yolo_objects=[]):
+    """Ultra-simplified grid visualization for maximum performance"""
+    # Get depth data as numpy array
+    depth_image = np.asanyarray(depth_frame.get_data())
+    
+    # Get dimensions
+    height, width = depth_image.shape
+    
+    # Calculate cell dimensions
+    cell_height = height // grid_size
+    cell_width = width // grid_size
+    
+    # Create a colorized depth image as base - use a simpler COLORMAP
+    depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+    
+    # Define exclusion zones
+    ground_row_cutoff = grid_size - 3
+    sky_row_cutoff = 3
+    left_col_cutoff = 2
+    right_col_cutoff = grid_size - 2
+    
+    # Draw exclusion lines - simplified
+    ground_line_y = ground_row_cutoff * cell_height
+    sky_line_y = sky_row_cutoff * cell_height
+    cv2.line(depth_colormap, (0, ground_line_y), (width, ground_line_y), (255, 255, 0), 1)
+    cv2.line(depth_colormap, (0, sky_line_y), (width, sky_line_y), (255, 200, 0), 1)
+    
+    # List to store detected objects
+    grid_objects = []
+    
+    # Reduced resolution grid processing - half the cells for better performance
+    for i in range(0, grid_size, 2):  # Step by 2 to halve processing
+        for j in range(0, grid_size, 2):
+            # Calculate cell boundaries
+            y_start = i * cell_height
+            y_end = (i + 2) * cell_height if i < grid_size - 2 else height
+            x_start = j * cell_width
+            x_end = (j + 2) * cell_width if j < grid_size - 2 else width
+            
+            # Draw grid cell - only draw larger cells to reduce line drawing operations
+            cv2.rectangle(depth_colormap, (x_start, y_start), (x_end, y_end), (255, 255, 255), 1)
+            
+            # Extract the cell from depth image
+            cell = depth_image[y_start:y_end, x_start:x_end]
+            
+            # Find minimum non-zero distance - simplified
+            non_zero_cell = cell[cell > 0]
+            if non_zero_cell.size > 0:
+                min_dist = np.min(non_zero_cell) * depth_scale
+                
+                # Calculate cell center
+                cell_center_x = x_start + (x_end - x_start) // 2
+                cell_center_y = y_start + (y_end - y_start) // 2
+                
+                # Skip most text rendering for better performance
+                if (i % 2 == 0 and j % 2 == 0):  # Only show distance for some cells
+                    text = f"{min_dist:.1f}"  # Reduced precision
+                    cv2.putText(depth_colormap, text, (x_start + 5, y_start + 15), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+                
+                # Check if cell is in detection zone and close
+                if (min_dist < highlight_threshold and 
+                    i >= sky_row_cutoff and i < ground_row_cutoff and
+                    j >= left_col_cutoff and j < right_col_cutoff):
+                    
+                    # Just draw a semi-transparent red rectangle - no complex overlays
+                    cv2.rectangle(depth_colormap, (x_start, y_start), (x_end, y_end), (0, 0, 255), 2)
+                    
+                    # Add to grid objects - minimal information
+                    grid_objects.append({
+                        "distance": min_dist,
+                        "angle": calculate_angle(cell_center_x, width)
+                    })
+    
+    # Very simplified top-down view
+    top_view = np.zeros((150, 150, 3), dtype=np.uint8)
+    top_view[:] = (30, 30, 30)
+    
+    # Draw camera position
+    cv2.circle(top_view, (75, 130), 3, (0, 255, 0), -1)
+    
+    # Draw objects
+    for obj in grid_objects:
+        dist = obj["distance"]
+        angle = obj["angle"]
+        if dist > 0 and dist <= 5.0:
+            # Simple conversion to x,y
+            rad = math.radians(-angle)
+            x = int(75 + dist * 20 * math.sin(rad))
+            y = int(130 - dist * 20 * math.cos(rad))
+            cv2.circle(top_view, (x, y), 3, (150, 150, 150), -1)
+    
+    # Draw YOLO objects in top view
+    for obj in yolo_objects:
+        dist = obj.get("distance", 0)
+        angle = obj.get("angle", 0)
+        if dist > 0 and dist <= 5.0:
+            rad = math.radians(-angle)
+            x = int(75 + dist * 20 * math.sin(rad))
+            y = int(130 - dist * 20 * math.cos(rad))
+            cv2.circle(top_view, (x, y), 3, (255, 0, 0), -1)
+    
+    # Add top-down view to bottom right
+    depth_colormap[height-150:height, width-150:width] = top_view
+    
+    return depth_colormap
+
+def main():
+    print("Initializing camera...")
+    pipeline = rs.pipeline()
+    config = rs.config()
+    
+    # YOLO frame counter for performance
+    yolo_frame_counter = 0
+    yolo_process_frequency = 10  # Only run YOLO every 10 frames
+    yolo_objects = []  # This will persist between frames
+    
+    try:
+        # Configure streams - lower resolution for better performance
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 6)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 6)
+        
+        # Start streaming
+        profile = pipeline.start(config)
+        depth_sensor = profile.get_device().first_depth_sensor()
+        depth_scale = depth_sensor.get_depth_scale()
+        align = rs.align(rs.stream.color)
+        
+        # Load YOLO - only if we need it
+        print("Loading YOLO model...")
+        net = cv2.dnn.readNet("yolov3-tiny.weights", "yolov3-tiny.cfg")
+        layer_names = net.getLayerNames()
+        output_layers = []
+        for i in net.getUnconnectedOutLayers():
+            if isinstance(i, (list, tuple)):
+                output_layers.append(layer_names[i[0] - 1])
+            else:
+                output_layers.append(layer_names[i - 1])
+        
+        # Load classes
+        classes = []
+        with open("coco.names", "r") as f:
+            classes = [line.strip() for line in f.readlines()]
+        
+        # Create windows once - don't recreate them every frame
+        cv2.namedWindow('Distance Grid', cv2.WINDOW_AUTOSIZE)
+        cv2.namedWindow('RealSense Object Detection', cv2.WINDOW_AUTOSIZE)
+        
+        print("Starting detection loop...")
+        while True:
+            start_time = time.time()  # Track frame processing time
+            
+            # Wait for frames with reduced timeout
+            frames = pipeline.wait_for_frames(timeout_ms=1000)
+            if not frames:
+                continue
+            
+            # Align frames
+            try:
+                aligned_frames = align.process(frames)
+                depth_frame = aligned_frames.get_depth_frame()
+                color_frame = aligned_frames.get_color_frame()
+            except:
+                depth_frame = frames.get_depth_frame()
+                color_frame = frames.get_color_frame()
+            
+            if not depth_frame or not color_frame:
+                continue
+            
+            # Convert images
+            color_image = np.asanyarray(color_frame.get_data())
+            height, width, channels = color_image.shape
+            
+            # Only run YOLO periodically to improve performance
+            yolo_frame_counter += 1
+            if yolo_frame_counter >= yolo_process_frequency:
+                yolo_frame_counter = 0
+                yolo_objects = []  # Reset YOLO objects
+                
+                # Run YOLO detection
+                blob = cv2.dnn.blobFromImage(color_image, 0.00392, (320, 320), (0, 0, 0), True, crop=False)  # Smaller size
+                net.setInput(blob)
+                outs = net.forward(output_layers)
+                
+                class_ids, confidences, boxes = [], [], []
+                for out in outs:
+                    for detection in out:
+                        scores = detection[5:]
+                        class_id = np.argmax(scores)
+                        confidence = scores[class_id]
+                        if confidence > 0.6:  # Higher confidence threshold
+                            center_x = int(detection[0] * width)
+                            center_y = int(detection[1] * height)
+                            w = int(detection[2] * width)
+                            h = int(detection[3] * height)
+                            
+                            x = int(center_x - w / 2)
+                            y = int(center_y - h / 2)
+                            
+                            boxes.append([x, y, w, h])
+                            confidences.append(float(confidence))
+                            class_ids.append(class_id)
+                
+                # Apply non-max suppression
+                if boxes:
+                    try:
+                        indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.6, 0.4)
+                        indexes = indexes.flatten() if isinstance(indexes, np.ndarray) else indexes
+                        
+                        important_classes = ['person', 'car', 'dog', 'bicycle']
+                        for i in indexes:
+                            x, y, w, h = boxes[i]
+                            label = str(classes[class_ids[i]])
+                            
+                            # Only process important classes
+                            if label in important_classes:
+                                center_x = min(max(0, x + w//2), width-1)
+                                center_y = min(max(0, y + h//2), height-1)
+                                
+                                try:
+                                    dist = depth_frame.get_distance(center_x, center_y)
+                                    if dist > 0:
+                                        cv2.rectangle(color_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                                        
+                                        # Add to YOLO objects
+                                        yolo_objects.append({
+                                            "distance": dist,
+                                            "angle": calculate_angle(center_x, width),
+                                            "label": label,
+                                            "is_yolo": True
+                                        })
+                                except:
+                                    pass
+                    except Exception as e:
+                        pass
+            
+            # Call grid visualization - simplified version
+            grid_vis = create_distance_grid_visualization(
+                depth_frame, 
+                depth_scale, 
+                grid_size=10,  # Reduced from 20 
+                highlight_threshold=3.0, 
+                yolo_objects=yolo_objects
+            )
+            
+            # Display results
+            cv2.imshow('Distance Grid', grid_vis)
+            cv2.imshow('RealSense Object Detection', color_image)
+            
+            # Calculate and display FPS
+            process_time = time.time() - start_time
+            fps = 1.0 / process_time if process_time > 0 else 0
+            cv2.putText(color_image, f"FPS: {fps:.1f}", (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            key = cv2.waitKey(1)
+            if key == 27:  # ESC key
+                break
+                
+    except Exception as e:
+        print(f"Error: {e}")
+        traceback.print_exc()
+        
+    finally:
+        pipeline.stop()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()

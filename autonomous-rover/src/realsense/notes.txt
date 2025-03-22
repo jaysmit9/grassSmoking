@@ -1,0 +1,1 @@
+ok - next is a heavy lift. I would like to add obstructions and hazards to the list of detections. They basically will do the same thing for the rover - keep clear. However a hazard may be something like a hole in the ground that it has to avoid or a bump that it needs to slow down for. An obstruction will be something it always has to go around.

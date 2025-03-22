@@ -1,0 +1,372 @@
+import pyrealsense2 as rs
+import numpy as np
+import cv2
+import time
+import os
+import sys
+import traceback
+
+# Check if the required files exist
+required_files = ["yolov3-tiny.weights", "yolov3-tiny.cfg", "coco.names"]
+for file in required_files:
+    if not os.path.isfile(file):
+        print(f"Error: {file} not found in the current directory")
+        sys.exit(1)
+
+# Define min and max depths in meters
+MIN_DEPTH = 0.3  # Objects closer than 0.3 meters will be ignored
+MAX_DEPTH = 5.0  # Objects farther than 5.0 meters will be ignored
+
+# Set detection expiration time (in seconds)
+DETECTION_TIMEOUT = 1.0  # Detections older than this will be removed
+
+print(f"Initializing camera (depth range: {MIN_DEPTH}m - {MAX_DEPTH}m)...")
+# Configure streams
+pipeline = rs.pipeline()
+config = rs.config()
+
+try:
+    # Configure streams with more relaxed timing requirements
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 15)  # Reduced to 15fps
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 15)  # Reduced to 15fps
+    
+    # Start streaming with more relaxed settings
+    print("Starting camera pipeline...")
+    pipeline_profile = pipeline.start(config)
+    device = pipeline_profile.get_device()
+    
+    # Reset the device before starting to clear any previous state
+    try:
+        print("Resetting camera to ensure clean startup...")
+        device.hardware_reset()
+        time.sleep(3)  # Give device time to reset
+        print("Camera reset complete, starting streams")
+    except:
+        print("Could not reset device, continuing anyway")
+    
+    print("Camera pipeline started successfully")
+    
+    # Get depth scale for reference
+    depth_sensor = pipeline_profile.get_device().first_depth_sensor()
+    depth_scale = depth_sensor.get_depth_scale()
+    print(f"Depth Scale is: {depth_scale}")
+    
+    # Configure additional depth sensor settings
+    try:
+        # Set depth limits if supported
+        if depth_sensor.supports(rs.option.min_distance):
+            depth_sensor.set_option(rs.option.min_distance, MIN_DEPTH)
+        if depth_sensor.supports(rs.option.max_distance):
+            depth_sensor.set_option(rs.option.max_distance, MAX_DEPTH)
+    except Exception as e:
+        print(f"Could not set depth limits on sensor: {e}")
+    
+    # Create align object
+    align = rs.align(rs.stream.color)
+    
+    # Load YOLO
+    print("Loading YOLO model...")
+    if os.path.isfile("yolov3-tiny.weights") and os.path.isfile("yolov3-tiny.cfg"):
+        print("Using YOLOv3-tiny for better performance")
+        net = cv2.dnn.readNet("yolov3-tiny.weights", "yolov3-tiny.cfg")
+    else:
+        print("Using standard YOLOv3")
+        net = cv2.dnn.readNet("yolov3.weights", "yolov3.cfg")
+    
+    print("Using CPU backend for YOLO")
+    
+    # Get output layers
+    layer_names = net.getLayerNames()
+    output_layers = []
+    for i in net.getUnconnectedOutLayers():
+        if isinstance(i, (list, tuple)):
+            output_layers.append(layer_names[i[0] - 1])
+        else:
+            output_layers.append(layer_names[i - 1])
+    
+    # Load class names
+    print("Loading class names...")
+    with open("coco.names", "r") as f:
+        classes = [line.strip() for line in f.readlines()]
+    print(f"Loaded {len(classes)} classes")
+    
+    # Performance tracking
+    frame_count = 0
+    start_time = time.time()
+    fps = 0
+    
+    # Variables to store detection results between frames
+    last_boxes = []
+    last_confidences = []
+    last_class_ids = []
+    last_distances = []
+    last_detection_time = []  # Store when each detection was last updated
+    
+    print("Starting detection loop...")
+    consecutive_timeouts = 0
+    max_consecutive_timeouts = 5
+    
+    try:
+        while True:
+            loop_start = time.time()
+            current_time = time.time()
+            
+            try:
+                # Wait for frames with increased timeout
+                frames = pipeline.wait_for_frames(timeout_ms=5000)  # Increased timeout to 5 seconds
+                consecutive_timeouts = 0  # Reset timeout counter on success
+            except Exception as e:
+                consecutive_timeouts += 1
+                print(f"Frame timeout ({consecutive_timeouts}/{max_consecutive_timeouts}): {e}")
+                
+                # If we've had too many consecutive timeouts, try to recover
+                if consecutive_timeouts >= max_consecutive_timeouts:
+                    print("Too many consecutive timeouts, attempting to recover...")
+                    try:
+                        pipeline.stop()
+                        time.sleep(1)
+                        pipeline = rs.pipeline()
+                        pipeline.start(config)
+                        consecutive_timeouts = 0
+                        print("Pipeline restarted successfully")
+                    except Exception as restart_error:
+                        print(f"Error restarting pipeline: {restart_error}")
+                continue
+            
+            # Try to align frames safely
+            try:
+                aligned_frames = align.process(frames)
+                depth_frame = aligned_frames.get_depth_frame()
+                color_frame = aligned_frames.get_color_frame()
+            except Exception as e:
+                print(f"Frame alignment error: {e}")
+                # Fall back to unaligned frames
+                try:
+                    depth_frame = frames.get_depth_frame()
+                    color_frame = frames.get_color_frame()
+                except:
+                    print("Could not extract frames")
+                    continue
+            
+            if not depth_frame or not color_frame:
+                print("Missing frames, continuing...")
+                continue
+            
+            # Convert images to numpy arrays - only color for display
+            try:
+                color_image = np.asanyarray(color_frame.get_data())
+                height, width, channels = color_image.shape
+            except Exception as e:
+                print(f"Error converting frames to numpy arrays: {e}")
+                continue
+            
+            # Process every other frame for better performance
+            if frame_count % 2 == 0:  # Only process every other frame
+                # YOLO object detection
+                try:
+                    # Use smaller input size for better performance
+                    blob = cv2.dnn.blobFromImage(color_image, 0.00392, (320, 320), (0, 0, 0), True, crop=False)
+                    net.setInput(blob)
+                    outs = net.forward(output_layers)
+                    
+                    # Process detections
+                    class_ids = []
+                    confidences = []
+                    boxes = []
+                    distances = []
+                    detection_times = []  # Time when each detection was made
+                    
+                    for out in outs:
+                        for detection in out:
+                            scores = detection[5:]
+                            class_id = np.argmax(scores)
+                            confidence = scores[class_id]
+                            # Higher confidence threshold for better performance
+                            if confidence > 0.6:  
+                                # Object detected
+                                center_x = int(detection[0] * width)
+                                center_y = int(detection[1] * height)
+                                w = int(detection[2] * width)
+                                h = int(detection[3] * height)
+                                
+                                # Rectangle coordinates
+                                x = int(center_x - w / 2)
+                                y = int(center_y - h / 2)
+                                
+                                # Get distance before deciding to keep the object
+                                try:
+                                    dist = depth_frame.get_distance(center_x, center_y)
+                                    
+                                    # Simplified sampling - just check a few points
+                                    if dist == 0:
+                                        # Fall back to sampling only if center point is invalid
+                                        dist_samples = []
+                                        for dx, dy in [(-5, -5), (5, 5), (-5, 5), (5, -5)]:
+                                            px = min(max(0, center_x + dx), width-1)
+                                            py = min(max(0, center_y + dy), height-1)
+                                            d = depth_frame.get_distance(px, py)
+                                            if d > 0:
+                                                dist_samples.append(d)
+                                        
+                                        if dist_samples:
+                                            dist = np.median(dist_samples)
+                                    
+                                    # Filter objects based on distance
+                                    if dist > 0 and MIN_DEPTH <= dist <= MAX_DEPTH:
+                                        boxes.append([x, y, w, h])
+                                        confidences.append(float(confidence))
+                                        class_ids.append(class_id)
+                                        distances.append(dist)
+                                        detection_times.append(current_time)  # Record detection time
+                                        
+                                except Exception as e:
+                                    # Still include the object if we can't get distance
+                                    boxes.append([x, y, w, h])
+                                    confidences.append(float(confidence))
+                                    class_ids.append(class_id)
+                                    distances.append(0)  # Unknown distance
+                                    detection_times.append(current_time)  # Record detection time
+                    
+                    # Apply non-max suppression
+                    if boxes:
+                        try:
+                            indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.6, 0.4)
+                            indexes = indexes.flatten() if isinstance(indexes, np.ndarray) else indexes
+                            
+                            # Update stored detections
+                            last_boxes = [boxes[i] for i in indexes]
+                            last_confidences = [confidences[i] for i in indexes]
+                            last_class_ids = [class_ids[i] for i in indexes]
+                            last_distances = [distances[i] for i in indexes]
+                            last_detection_time = [detection_times[i] for i in indexes]
+                        except Exception as e:
+                            print(f"Error in NMS: {e}")
+                    else:
+                        # No detections in this frame - clear lists if timeout has elapsed
+                        if not last_boxes or (current_time - max(last_detection_time) > DETECTION_TIMEOUT if last_detection_time else True):
+                            last_boxes = []
+                            last_confidences = []
+                            last_class_ids = []
+                            last_distances = []
+                            last_detection_time = []
+                except Exception as e:
+                    print(f"Error in object detection: {e}")
+            else:
+                # For frames where we don't run detection, check for stale detections
+                if last_detection_time:
+                    # Get indices of non-stale detections (within timeout)
+                    valid_indices = [i for i, t in enumerate(last_detection_time) 
+                                     if current_time - t <= DETECTION_TIMEOUT]
+                    
+                    # Filter out stale detections
+                    if valid_indices:
+                        last_boxes = [last_boxes[i] for i in valid_indices]
+                        last_confidences = [last_confidences[i] for i in valid_indices]
+                        last_class_ids = [last_class_ids[i] for i in valid_indices]
+                        last_distances = [last_distances[i] for i in valid_indices]
+                        last_detection_time = [last_detection_time[i] for i in valid_indices]
+                    else:
+                        # All detections are stale, clear everything
+                        last_boxes = []
+                        last_confidences = []
+                        last_class_ids = []
+                        last_distances = []
+                        last_detection_time = []
+            
+            # Always draw the most recent valid detections
+            try:
+                for i in range(len(last_boxes)):
+                    x, y, w, h = last_boxes[i]
+                    label = str(classes[last_class_ids[i]])
+                    confidence = last_confidences[i]
+                    dist = last_distances[i]
+                    detection_age = current_time - last_detection_time[i]
+                    
+                    # Skip drawing if distance is outside our range
+                    if not (MIN_DEPTH <= dist <= MAX_DEPTH) and dist != 0:
+                        continue
+                        
+                    # Choose color based on distance
+                    if dist == 0:
+                        color = (255, 255, 255)  # White for unknown distance
+                    elif dist < 1.0:
+                        color = (0, 0, 255)      # Red for close objects
+                    elif dist < 2.0:
+                        color = (0, 255, 255)    # Yellow for medium distance
+                    else:
+                        color = (0, 255, 0)      # Green for far objects
+                    
+                    # Fade the box opacity as the detection gets older
+                    alpha = max(0, 1.0 - detection_age / DETECTION_TIMEOUT)
+                    
+                    # Draw bounding box with color based on distance
+                    cv2.rectangle(color_image, (x, y), (x + w, y + h), color, 2)
+                    
+                    # Add background for better text visibility
+                    text = f"{label} {confidence:.2f} {dist:.2f}m"
+                    text_size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                    cv2.rectangle(color_image, (x, y - text_size[1] - 10), 
+                                 (x + text_size[0], y), (0, 0, 0), -1)
+                    
+                    # Draw text
+                    cv2.putText(color_image, text, (x, y - 5), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            except Exception as e:
+                print(f"Error drawing detections: {e}")
+            
+            # Calculate and display FPS
+            frame_count += 1
+            if frame_count >= 30:  # Update FPS every 30 frames
+                current_time = time.time()
+                fps = frame_count / (current_time - start_time)
+                frame_count = 0
+                start_time = current_time
+            
+            # Display FPS and depth range on image
+            cv2.putText(color_image, f"FPS: {fps:.1f}", (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(color_image, f"Depth range: {MIN_DEPTH}-{MAX_DEPTH}m", (10, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Show only the color image with detections
+            cv2.namedWindow('Object Detection', cv2.WINDOW_AUTOSIZE)
+            cv2.imshow('Object Detection', color_image)
+            
+            # Press ESC to exit
+            key = cv2.waitKey(1)
+            if key == 27:  # ESC key
+                break
+            # Press + to increase max depth
+            elif key == ord('+') or key == ord('='):
+                MAX_DEPTH = min(MAX_DEPTH + 0.5, 10.0)
+                print(f"Increased max depth to {MAX_DEPTH}m")
+            # Press - to decrease max depth
+            elif key == ord('-') or key == ord('_'):
+                MAX_DEPTH = max(MAX_DEPTH - 0.5, MIN_DEPTH + 0.1)
+                print(f"Decreased max depth to {MAX_DEPTH}m")
+            # Press [ to decrease min depth
+            elif key == ord('[') or key == ord('{'):
+                MIN_DEPTH = max(MIN_DEPTH - 0.1, 0.1)
+                print(f"Decreased min depth to {MIN_DEPTH}m")
+            # Press ] to increase min depth
+            elif key == ord(']') or key == ord('}'):
+                MIN_DEPTH = min(MIN_DEPTH + 0.1, MAX_DEPTH - 0.1)
+                print(f"Increased min depth to {MIN_DEPTH}m")
+                
+    except KeyboardInterrupt:
+        print("Keyboard interrupt, stopping...")
+    
+except Exception as e:
+    print(f"Setup error: {e}")
+    traceback.print_exc()
+    
+finally:
+    # Stop streaming
+    print("Stopping pipeline...")
+    try:
+        pipeline.stop()
+    except Exception as e:
+        print(f"Error stopping pipeline: {e}")
+        
+    cv2.destroyAllWindows()
+    print("Application closed")

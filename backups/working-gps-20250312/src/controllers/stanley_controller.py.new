@@ -1,0 +1,206 @@
+import numpy as np
+import json
+from geopy.distance import geodesic
+from hardware.gps_monitor import GPSMonitor
+from hardware.motor_controller import MotorController
+
+class StanleyController:
+    def __init__(self, waypoints, k=4.8, k_e=10.0, L=1.0, max_steer=np.radians(50), waypoint_reach_threshold=1.0):
+        self.waypoints = waypoints
+        self.k = k
+        self.k_e = k_e
+        self.L = L
+        self.max_steer = max_steer
+        self.waypoint_reach_threshold = waypoint_reach_threshold  # Add this line
+        self.target_idx = 1  # Initial target waypoint index
+        self.gps_monitor = GPSMonitor()
+        self.motor_controller = MotorController()
+
+    def add_extension_waypoint(self, extension_distance=1.0):
+        if len(self.waypoints) < 2:
+            return self.waypoints
+        
+        final_waypoint = self.waypoints[-1]
+        second_last_waypoint = self.waypoints[-2]
+        
+        lat_diff = final_waypoint[0] - second_last_waypoint[0]
+        lon_diff = final_waypoint[1] - second_last_waypoint[1]
+        
+        distance = self.haversine_distance(
+            (second_last_waypoint[0], second_last_waypoint[1]),
+            (final_waypoint[0], final_waypoint[1])
+        )
+        
+        if distance > 0:
+            lat_diff /= distance
+            lon_diff /= distance
+        else:
+            lat_diff = 1.0
+            lon_diff = 0.0
+        
+        METERS_PER_LAT_DEGREE = 111000
+        lat_change_per_meter = 1.0 / METERS_PER_LAT_DEGREE
+        lon_change_per_meter = 1.0 / (METERS_PER_LAT_DEGREE * np.cos(np.radians(final_waypoint[0])))
+        
+        extension_lat = final_waypoint[0] + lat_diff * extension_distance * lat_change_per_meter
+        extension_lon = final_waypoint[1] + lon_diff * extension_distance * lon_change_per_meter
+        
+        extended_waypoints = np.copy(self.waypoints)
+        extended_waypoints = np.vstack([extended_waypoints, [extension_lat, extension_lon]])
+        
+        return extended_waypoints
+
+    def haversine_distance(self, coord1, coord2):
+        return geodesic(coord1, coord2).meters
+
+    def control_loop(self):
+        while True:
+            current_position = self.gps_monitor.get_position()
+            x, y, yaw, v = current_position
+            
+            delta, self.target_idx, distance, cte, yaw_error = self.stanley_control(x, y, yaw, v)
+            self.motor_controller.set_speed(v)
+            self.motor_controller.set_steering(delta)
+
+    def stanley_control(self, x, y, yaw, v):
+        """
+        Stanley controller with proper CTE calculation
+        """
+        # Find nearest waypoint
+        self.target_idx = self._find_target_waypoint(x, y, self.target_idx)
+        
+        # Get current and next waypoints
+        if self.target_idx == 0:
+            prev_point = self.waypoints[0]
+            current_point = self.waypoints[1]
+        else:
+            prev_point = self.waypoints[self.target_idx - 1]
+            current_point = self.waypoints[self.target_idx]
+        
+        # Calculate distance to target waypoint
+        distance = self.haversine_distance((x, y), current_point)
+        
+        # CALCULATE CROSS-TRACK ERROR (CTE)
+        # 1. Find the path segment (line between waypoints)
+        path_start = prev_point
+        path_end = current_point
+        
+        # 2. Calculate projections and CTE using vector math
+        # First, calculate vectors in lat/lon space
+        path_vector = [path_end[0] - path_start[0], path_end[1] - path_start[1]]
+        point_vector = [x - path_start[0], y - path_start[1]]
+        
+        # Calculate path length
+        path_length = np.sqrt(path_vector[0]**2 + path_vector[1]**2)
+        if path_length > 0:
+            # Normalize path vector
+            path_unit = [path_vector[0]/path_length, path_vector[1]/path_length]
+            
+            # Project point onto path
+            dot_product = point_vector[0]*path_unit[0] + point_vector[1]*path_unit[1]
+            
+            # Calculate projection point
+            proj_point = [path_start[0] + dot_product*path_unit[0], 
+                          path_start[1] + dot_product*path_unit[1]]
+            
+            # Calculate CTE as distance from point to projection
+            cte_meters = self.haversine_distance((x, y), proj_point)
+            
+            # Determine CTE sign (left or right of path)
+            # Use cross product to determine side
+            cross_z = path_vector[0]*point_vector[1] - path_vector[1]*point_vector[0]
+            cte = cte_meters * (1 if cross_z >= 0 else -1)
+        else:
+            # If path length is zero, use distance to start point as CTE
+            cte = self.haversine_distance((x, y), path_start)
+        
+        # Get current heading in degrees (0-360)
+        current_heading_deg = np.degrees(yaw) % 360
+        
+        # Calculate bearing to target waypoint
+        bearing_deg = self._calculate_bearing(x, y, current_point[0], current_point[1])
+        
+        # Calculate heading error (how much we need to turn)
+        # Normalize to -180 to 180 range
+        heading_error_deg = bearing_deg - current_heading_deg
+        while heading_error_deg > 180:
+            heading_error_deg -= 360
+        while heading_error_deg < -180:
+            heading_error_deg += 360
+        
+        # Convert heading error to radians
+        heading_error = np.radians(heading_error_deg)
+        
+        # COMPLETE STANLEY CONTROL LAW
+        # Heading term (proportional to heading error)
+        heading_term = heading_error
+        
+        # Cross-track error term
+        # Ensure v is not zero to prevent division by zero
+        v_safe = max(v, 0.1)  # Minimum velocity to prevent division by zero
+        cte_term = np.arctan2(self.k_e * cte, v_safe)
+        
+        # Combine both terms for final steering command
+        delta = heading_term + cte_term
+        
+        # Apply controller gain to heading error
+        delta = self.k * delta
+        
+        return delta, self.target_idx, distance, cte, heading_error
+
+    def _haversine_distance(self, coord1, coord2):
+        """Calculate the great circle distance between two points in meters"""
+        from geopy.distance import geodesic
+        return geodesic(coord1, coord2).meters
+
+    def _normalize_angle(self, angle):
+        """Normalize an angle to [-pi, pi]"""
+        while angle > np.pi:
+            angle -= 2.0 * np.pi
+        while angle < -np.pi:
+            angle += 2.0 * np.pi
+        return angle
+
+    def _calculate_bearing(self, lat1, lon1, lat2, lon2):
+        """Calculate bearing between two points in degrees (0-360)"""
+        import math
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        
+        dlon = lon2 - lon1
+        x = math.sin(dlon) * math.cos(lat2)
+        y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+        bearing = math.atan2(x, y)
+        
+        return (math.degrees(bearing) + 360) % 360
+
+    def _find_target_waypoint(self, x, y, current_idx):
+        """Find the next waypoint to target"""
+        # Ensure current_idx is valid
+        if current_idx >= len(self.waypoints):
+            return len(self.waypoints) - 1
+        
+        # Get current target waypoint
+        current_point = self.waypoints[current_idx]
+        
+        # Calculate distance to current target
+        distance = self.haversine_distance((x, y), current_point)
+        
+        # If we've reached the current target within threshold
+        if distance < self.waypoint_reach_threshold:
+            # Move to next waypoint if we have more
+            if current_idx < len(self.waypoints) - 1:
+                return current_idx + 1
+        
+        return current_idx
+
+def main():
+    with open('data/polygon_data.json') as f:
+        polygon_data = json.load(f)
+    
+    waypoints = np.array([(point['lat'], point['lon']) for point in polygon_data])
+    controller = StanleyController(waypoints)
+    
+    controller.control_loop()
+
+if __name__ == "__main__":
+    main()
