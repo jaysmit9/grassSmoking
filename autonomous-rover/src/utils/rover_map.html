@@ -4,6 +4,13 @@
     
     <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
     
+            <meta http-equiv="refresh" content="5">
+            <div style="position:fixed; bottom:10px; left:10px; z-index:9999; background:rgba(255,255,255,0.8); 
+                 padding:5px; border-radius:5px; font-weight:bold; color:#000;">
+                 Auto-refresh enabled
+            </div>
+            
+    
         <script>
             L_NO_TOUCH = false;
             L_DISABLE_3D = false;
@@ -25,7 +32,7 @@
             <meta name="viewport" content="width=device-width,
                 initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                #map_d40690ac805dbb17fe1b3921c103ac60 {
+                #map_acce37376e21714f661063f6a392612e {
                     position: relative;
                     width: 100.0%;
                     height: 100.0%;
@@ -35,193 +42,87 @@
                 .leaflet-container { font-size: 1rem; }
             </style>
         
+    <script src="https://cdn.jsdelivr.net/gh/ljagis/leaflet-measure@2.1.7/dist/leaflet-measure.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/ljagis/leaflet-measure@2.1.7/dist/leaflet-measure.min.css"/>
 </head>
 <body>
     
     
-        <div id="info-panel" style="
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            z-index: 1000;
-            background-color: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
-            max-width: 300px;
-            max-height: 80%;
-            overflow-y: auto;
-        ">
-            <h4 style="margin-top: 0;">Waypoint Information</h4>
-            <div id="waypoint-info">Loading...</div>
-        </div>
-        
+            <div style="position: fixed; 
+                        top: 10px; 
+                        right: 10px; 
+                        z-index: 1000; 
+                        background-color: white; 
+                        padding: 10px; 
+                        border-radius: 5px; 
+                        box-shadow: 0 0 5px rgba(0,0,0,0.3);
+                        max-height: 300px;
+                        overflow-y: auto;">
+                <h4>Distances to Waypoints</h4>
+                <table border="1" style="width: 100%;">
+                    <tr>
+                        <th>WP</th>
+                        <th>Distance</th>
+                        <th>Bearing</th>
+                        <th>Turn</th>
+                    </tr>
+            
+                    <tr>
+                        <td>0</td>
+                        <td>0.4m</td>
+                        <td>300.0°</td>
+                        <td>←74.7°</td>
+                    </tr>
+                
+                    <tr>
+                        <td>1</td>
+                        <td>4.8m</td>
+                        <td>42.7°</td>
+                        <td>→28.0°</td>
+                    </tr>
+                
+                    <tr>
+                        <td>5</td>
+                        <td>6.1m</td>
+                        <td>170.3°</td>
+                        <td>→155.6°</td>
+                    </tr>
+                
+                    <tr>
+                        <td>4</td>
+                        <td>9.7m</td>
+                        <td>171.7°</td>
+                        <td>→157.0°</td>
+                    </tr>
+                
+                    <tr>
+                        <td>3</td>
+                        <td>11.5m</td>
+                        <td>160.9°</td>
+                        <td>→146.2°</td>
+                    </tr>
+                
+                    <tr>
+                        <td>2</td>
+                        <td>11.6m</td>
+                        <td>159.7°</td>
+                        <td>→145.0°</td>
+                    </tr>
+                
+                </table>
+            </div>
+            
     
-        <script>
-        var roverMarker = null;
-        var headingLine = null;
-        
-        // Haversine formula to calculate distance between points
-        function haversineDistance(lat1, lon1, lat2, lon2) {
-            function toRad(x) {
-                return x * Math.PI / 180;
-            }
-            
-            var R = 6371; // Earth's radius in km
-            var dLat = toRad(lat2 - lat1);
-            var dLon = toRad(lat2 - lat1);
-            var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
-                    Math.sin(dLon/2) * Math.sin(dLon/2);
-            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            var d = R * c;
-            return d * 1000; // Convert to meters
-        }
-        
-        // Calculate bearing between two points
-        function calculateBearing(lat1, lon1, lat2, lon2) {
-            function toRad(x) {
-                return x * Math.PI / 180;
-            }
-            
-            // Convert to radians
-            var lat1Rad = toRad(lat1);
-            var lon1Rad = toRad(lon1);
-            var lat2Rad = toRad(lat2);
-            var lon2Rad = toRad(lon2);
-            
-            // Calculate bearing (EXACT SAME ALGORITHM as GPS monitor)
-            var dlon = lon2Rad - lon1Rad;
-            var y = Math.sin(dlon) * Math.cos(lat2Rad);
-            var x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - 
-                    Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dlon);
-            var bearing = Math.atan2(y, x);
-            
-            // Convert to degrees and normalize to 0-360
-            var bearingDeg = bearing * 180 / Math.PI;
-            bearingDeg = (bearingDeg + 360) % 360;
-            
-            return bearingDeg;
-        }
-        
-        // Calculate relative bearing (difference from current heading)
-        function calculateRelativeBearing(currentHeading, targetBearing) {
-            var diff = targetBearing - currentHeading;
-            // Normalize to -180 to 180
-            return ((diff + 180) % 360) - 180;
-        }
-        
-        // Waypoint coordinates
-        var waypoints = [[-77.86700018666667, 34.15195716], [-77.866943845, 34.152101085], [-77.866835825, 34.15205685], [-77.86685284333333, 34.15195394]];
-        
-        function updateInfoPanel(roverLat, roverLon, heading, targetIdx) {
-            var infoHtml = '<table style="width:100%"><tr><th>WP</th><th>Dist (m)</th><th>Heading</th><th>Turn</th></tr>';
-            
-            waypoints.forEach(function(waypoint, idx) {
-                var wpLat = waypoint[0];
-                var wpLon = waypoint[1];
-                
-                // Calculate distance
-                var distance = haversineDistance(roverLat, roverLon, wpLat, wpLon);
-                
-                // Calculate bearing to waypoint
-                var bearing = calculateBearing(roverLat, roverLon, wpLat, wpLon);
-                
-                // Calculate relative bearing (how much to turn)
-                var relativeBearing = calculateRelativeBearing(heading, bearing);
-                
-                // Determine turn direction
-                var turnDirection = relativeBearing > 0 ? "→" : relativeBearing < 0 ? "←" : "↑";
-                
-                // Highlight current target waypoint
-                var style = (idx === targetIdx) ? 'background-color: #ffff99;' : '';
-                
-                infoHtml += '<tr style="' + style + '">' +
-                           '<td>' + idx + '</td>' +
-                           '<td>' + distance.toFixed(1) + '</td>' +
-                           '<td>' + bearing.toFixed(1) + '°</td>' +
-                           '<td>' + turnDirection + ' ' + Math.abs(relativeBearing).toFixed(1) + '°</td>' +
-                           '</tr>';
-            });
-            
-            infoHtml += '</table>';
-            document.getElementById('waypoint-info').innerHTML = infoHtml;
-        }
-        
-        function updatePosition() {
-            fetch('current_position.json')
-                .then(response => response.json())
-                .then(data => {
-                    var latlng = [data.lat, data.lon];
-                    
-                    // Update or create rover marker
-                    if (!roverMarker) {
-                        roverMarker = L.marker(latlng, {
-                            icon: L.divIcon({
-                                html: '<div style="color: white; background-color: red; width: 20px; height: 20px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transform: rotate(' + (data.heading - 90) + 'deg)">⬆</div>',
-                                className: 'rover-marker',
-                                iconSize: [20, 20]
-                            })
-                        }).addTo(map);
-                    } else {
-                        roverMarker.setLatLng(latlng);
-                        roverMarker.setIcon(L.divIcon({
-                            html: '<div style="color: white; background-color: red; width: 20px; height: 20px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transform: rotate(' + (data.heading - 90) + 'deg)">⬆</div>',
-                            className: 'rover-marker',
-                            iconSize: [20, 20]
-                        }));
-                    }
-                    
-                    roverMarker.bindPopup("Current Heading: " + data.heading.toFixed(1) + "°<br>Target: WP " + data.target_idx);
-                    
-                    // Update info panel with distances and headings
-                    updateInfoPanel(data.lat, data.lon, data.heading, data.target_idx);
-                    
-                    // Draw heading line
-                    if (headingLine) {
-                        map.removeLayer(headingLine);
-                    }
-                    
-                    // Convert heading to radians and calculate end point
-                    var headingRad = data.heading * Math.PI / 180;
-                    var length = 0.00005; // adjust for visible line length
-
-                    // Correct calculation for heading line endpoint
-                    // Note: Longitude changes with cosine of heading, latitude with sine
-                    var endLat = data.lat + Math.cos(headingRad) * length;
-                    var endLng = data.lon + Math.sin(headingRad) * length;
-
-                    headingLine = L.polyline([latlng, [endLat, endLng]], {
-                        color: 'red',
-                        weight: 2
-                    }).addTo(map);
-                    
-                    // Update every 0.5 seconds
-                    setTimeout(updatePosition, 500);
-                })
-                .catch(error => {
-                    console.error('Error fetching position:', error);
-                    setTimeout(updatePosition, 2000); // Retry after 2 seconds on error
-                });
-        }
-        
-        // Start position updates when the map is ready
-        map.whenReady(function() {
-            setTimeout(updatePosition, 100);
-        });
-        </script>
-        
-    
-            <div class="folium-map" id="map_d40690ac805dbb17fe1b3921c103ac60" ></div>
+            <div class="folium-map" id="map_acce37376e21714f661063f6a392612e" ></div>
         
 </body>
 <script>
     
     
-            var map_d40690ac805dbb17fe1b3921c103ac60 = L.map(
-                "map_d40690ac805dbb17fe1b3921c103ac60",
+            var map_acce37376e21714f661063f6a392612e = L.map(
+                "map_acce37376e21714f661063f6a392612e",
                 {
-                    center: [-77.866908175, 34.15201725875],
+                    center: [34.366709, -78.22745016666667],
                     crs: L.CRS.EPSG3857,
                     ...{
   "zoom": 20,
@@ -236,14 +137,14 @@
 
         
     
-            var tile_layer_6fb5787b16789b425d392da65e4191b6 = L.tileLayer(
-                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            var tile_layer_8795e12e9e2a505a50fb3dfaf2ebe07a = L.tileLayer(
+                "https://mt1.google.com/vt/lyrs=s\u0026x={x}\u0026y={y}\u0026z={z}",
                 {
   "minZoom": 0,
-  "maxZoom": 19,
-  "maxNativeZoom": 19,
+  "maxZoom": 21,
+  "maxNativeZoom": 21,
   "noWrap": false,
-  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "attribution": "Google Satellite",
   "subdomains": "abc",
   "detectRetina": false,
   "tms": false,
@@ -253,17 +154,114 @@
             );
         
     
-            tile_layer_6fb5787b16789b425d392da65e4191b6.addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+            tile_layer_8795e12e9e2a505a50fb3dfaf2ebe07a.addTo(map_acce37376e21714f661063f6a392612e);
         
     
-            var marker_35dee9d3c32b6df1690ff93f55a5489d = L.marker(
-                [-77.86700018666667, 34.15195716],
+            var layer_control_0dd1c01eca43a7e65061b6a64f7c56ef_layers = {
+                base_layers : {
+                    "https://mt1.google.com/vt/lyrs=s\u0026x={x}\u0026y={y}\u0026z={z}" : tile_layer_8795e12e9e2a505a50fb3dfaf2ebe07a,
+                },
+                overlays :  {
+                },
+            };
+            let layer_control_0dd1c01eca43a7e65061b6a64f7c56ef = L.control.layers(
+                layer_control_0dd1c01eca43a7e65061b6a64f7c56ef_layers.base_layers,
+                layer_control_0dd1c01eca43a7e65061b6a64f7c56ef_layers.overlays,
+                {
+  "position": "topright",
+  "collapsed": true,
+  "autoZIndex": true,
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+
+        
+    
+            var marker_7847aa1fcf5b4583e614d38adf1c677f = L.marker(
+                [34.36671066666667, -78.22745366666666],
                 {
 }
-            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+            ).addTo(map_acce37376e21714f661063f6a392612e);
         
     
-            var icon_175b21bb0d29ca576f5573e4e1729eea = L.AwesomeMarkers.icon(
+            var div_icon_d8989e1402bac783190934f830c31f52 = L.divIcon({
+  "html": "\u003cdiv style=\"font-size: 12pt; background-color: rgba(255,255,255,0.7); padding: 3px; border-radius: 3px;\"\u003e0.4m\u003c/div\u003e",
+  "iconSize": [150, 36],
+  "iconAnchor": [75, 0],
+  "className": "empty",
+});
+            marker_7847aa1fcf5b4583e614d38adf1c677f.setIcon(div_icon_d8989e1402bac783190934f830c31f52);
+        
+    
+            var marker_ca2b652e8dd47187311730c536875f56 = L.marker(
+                [34.36671066666667, -78.22745366666666],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var icon_7ed84e34130fc68128dd07289cf1ed05 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "green",
+  "iconColor": "white",
+  "icon": "star",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_ca2b652e8dd47187311730c536875f56.setIcon(icon_7ed84e34130fc68128dd07289cf1ed05);
+        
+    
+        var popup_9a608103766bfa33ae9118b52d158ce7 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_cf8d6049e0817ac1c5f471963aec5863 = $(`<div id="html_cf8d6049e0817ac1c5f471963aec5863" style="width: 100.0%; height: 100.0%;"><b>Waypoint 0</b><br>Distance: 0.4m</div>`)[0];
+                popup_9a608103766bfa33ae9118b52d158ce7.setContent(html_cf8d6049e0817ac1c5f471963aec5863);
+            
+        
+
+        marker_ca2b652e8dd47187311730c536875f56.bindPopup(popup_9a608103766bfa33ae9118b52d158ce7)
+        ;
+
+        
+    
+    
+            marker_ca2b652e8dd47187311730c536875f56.bindTooltip(
+                `<div>
+                     WP 0: 0.4m
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_0f8b0ed9c9d9907df289c08c076ab8ea = L.marker(
+                [34.366741, -78.22741433333333],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var div_icon_91a5b70c7b1385a181de57bbff76a307 = L.divIcon({
+  "html": "\u003cdiv style=\"font-size: 12pt; background-color: rgba(255,255,255,0.7); padding: 3px; border-radius: 3px;\"\u003e4.8m\u003c/div\u003e",
+  "iconSize": [150, 36],
+  "iconAnchor": [75, 0],
+  "className": "empty",
+});
+            marker_0f8b0ed9c9d9907df289c08c076ab8ea.setIcon(div_icon_91a5b70c7b1385a181de57bbff76a307);
+        
+    
+            var marker_7d2c646536d1430bf4c5a008876c530d = L.marker(
+                [34.366741, -78.22741433333333],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var icon_cc6138820555fa2ef0b3f7e4317f618e = L.AwesomeMarkers.icon(
                 {
   "markerColor": "blue",
   "iconColor": "white",
@@ -272,34 +270,60 @@
   "extraClasses": "fa-rotate-0",
 }
             );
-            marker_35dee9d3c32b6df1690ff93f55a5489d.setIcon(icon_175b21bb0d29ca576f5573e4e1729eea);
+            marker_7d2c646536d1430bf4c5a008876c530d.setIcon(icon_cc6138820555fa2ef0b3f7e4317f618e);
         
     
-        var popup_6a7f80fbf91a1058b414dc0553102d7a = L.popup({
+        var popup_6f84af2d26c0189d278b7564509a087c = L.popup({
   "maxWidth": "100%",
 });
 
         
             
-                var html_a763d88e8c07692509c8f818cc37d27d = $(`<div id="html_a763d88e8c07692509c8f818cc37d27d" style="width: 100.0%; height: 100.0%;">Waypoint 0</div>`)[0];
-                popup_6a7f80fbf91a1058b414dc0553102d7a.setContent(html_a763d88e8c07692509c8f818cc37d27d);
+                var html_656a607da07a206ead4f4b6eeaea0be1 = $(`<div id="html_656a607da07a206ead4f4b6eeaea0be1" style="width: 100.0%; height: 100.0%;"><b>Waypoint 1</b><br>Distance: 4.8m</div>`)[0];
+                popup_6f84af2d26c0189d278b7564509a087c.setContent(html_656a607da07a206ead4f4b6eeaea0be1);
             
         
 
-        marker_35dee9d3c32b6df1690ff93f55a5489d.bindPopup(popup_6a7f80fbf91a1058b414dc0553102d7a)
+        marker_7d2c646536d1430bf4c5a008876c530d.bindPopup(popup_6f84af2d26c0189d278b7564509a087c)
         ;
 
         
     
     
-            var marker_3c12884dd0729e5116e431e4143be1e5 = L.marker(
-                [-77.866943845, 34.152101085],
+            marker_7d2c646536d1430bf4c5a008876c530d.bindTooltip(
+                `<div>
+                     WP 1: 4.8m
+                 </div>`,
                 {
+  "sticky": true,
 }
-            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+            );
         
     
-            var icon_df8f2837027996ef86330e5e86de406d = L.AwesomeMarkers.icon(
+            var marker_76cb05a6e8d952f3dc0eaa79009a3d21 = L.marker(
+                [34.366610666666666, -78.22740616666667],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var div_icon_067170bbca9d26f36bd85ff116e66d77 = L.divIcon({
+  "html": "\u003cdiv style=\"font-size: 12pt; background-color: rgba(255,255,255,0.7); padding: 3px; border-radius: 3px;\"\u003e11.6m\u003c/div\u003e",
+  "iconSize": [150, 36],
+  "iconAnchor": [75, 0],
+  "className": "empty",
+});
+            marker_76cb05a6e8d952f3dc0eaa79009a3d21.setIcon(div_icon_067170bbca9d26f36bd85ff116e66d77);
+        
+    
+            var marker_1e442abb0444ea46942b0e2ef0a9ef13 = L.marker(
+                [34.366610666666666, -78.22740616666667],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var icon_4738f79b11a0c509706319fa479cbe47 = L.AwesomeMarkers.icon(
                 {
   "markerColor": "blue",
   "iconColor": "white",
@@ -308,34 +332,60 @@
   "extraClasses": "fa-rotate-0",
 }
             );
-            marker_3c12884dd0729e5116e431e4143be1e5.setIcon(icon_df8f2837027996ef86330e5e86de406d);
+            marker_1e442abb0444ea46942b0e2ef0a9ef13.setIcon(icon_4738f79b11a0c509706319fa479cbe47);
         
     
-        var popup_9bc2c4207af36c9bd9f920b47f5ebe58 = L.popup({
+        var popup_49e9f28656084b62ef9fd3ac0406cd66 = L.popup({
   "maxWidth": "100%",
 });
 
         
             
-                var html_9ca615b3cf98f825158d6ecf3a488932 = $(`<div id="html_9ca615b3cf98f825158d6ecf3a488932" style="width: 100.0%; height: 100.0%;">Waypoint 1</div>`)[0];
-                popup_9bc2c4207af36c9bd9f920b47f5ebe58.setContent(html_9ca615b3cf98f825158d6ecf3a488932);
+                var html_b62bf015b67f87a088bca7fd22259205 = $(`<div id="html_b62bf015b67f87a088bca7fd22259205" style="width: 100.0%; height: 100.0%;"><b>Waypoint 2</b><br>Distance: 11.6m</div>`)[0];
+                popup_49e9f28656084b62ef9fd3ac0406cd66.setContent(html_b62bf015b67f87a088bca7fd22259205);
             
         
 
-        marker_3c12884dd0729e5116e431e4143be1e5.bindPopup(popup_9bc2c4207af36c9bd9f920b47f5ebe58)
+        marker_1e442abb0444ea46942b0e2ef0a9ef13.bindPopup(popup_49e9f28656084b62ef9fd3ac0406cd66)
         ;
 
         
     
     
-            var marker_59fd90d764d11dd6b4ba65d86236aa62 = L.marker(
-                [-77.866835825, 34.15205685],
+            marker_1e442abb0444ea46942b0e2ef0a9ef13.bindTooltip(
+                `<div>
+                     WP 2: 11.6m
+                 </div>`,
                 {
+  "sticky": true,
 }
-            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+            );
         
     
-            var icon_e7c02a4e29098a134a3b8e0b10640368 = L.AwesomeMarkers.icon(
+            var marker_70e237d9df9240be4c7a09f3354ad8c9 = L.marker(
+                [34.36661083333333, -78.227409],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var div_icon_958969f062c2a8afe94fa6317c2a1055 = L.divIcon({
+  "html": "\u003cdiv style=\"font-size: 12pt; background-color: rgba(255,255,255,0.7); padding: 3px; border-radius: 3px;\"\u003e11.5m\u003c/div\u003e",
+  "iconSize": [150, 36],
+  "iconAnchor": [75, 0],
+  "className": "empty",
+});
+            marker_70e237d9df9240be4c7a09f3354ad8c9.setIcon(div_icon_958969f062c2a8afe94fa6317c2a1055);
+        
+    
+            var marker_517e8e4d0e24a6331cf0c2f573961ccc = L.marker(
+                [34.36661083333333, -78.227409],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var icon_adf6bdd2d2836a20a4157057e2a4af8c = L.AwesomeMarkers.icon(
                 {
   "markerColor": "blue",
   "iconColor": "white",
@@ -344,34 +394,60 @@
   "extraClasses": "fa-rotate-0",
 }
             );
-            marker_59fd90d764d11dd6b4ba65d86236aa62.setIcon(icon_e7c02a4e29098a134a3b8e0b10640368);
+            marker_517e8e4d0e24a6331cf0c2f573961ccc.setIcon(icon_adf6bdd2d2836a20a4157057e2a4af8c);
         
     
-        var popup_267d90066737993e6c9ca1f66c04b604 = L.popup({
+        var popup_9f8a5f7be2f0f4bd86f1e5687eae1e57 = L.popup({
   "maxWidth": "100%",
 });
 
         
             
-                var html_e1d49a2833f2080696864e05adbe7343 = $(`<div id="html_e1d49a2833f2080696864e05adbe7343" style="width: 100.0%; height: 100.0%;">Waypoint 2</div>`)[0];
-                popup_267d90066737993e6c9ca1f66c04b604.setContent(html_e1d49a2833f2080696864e05adbe7343);
+                var html_3d99554a671a4bf7f0c058c39ecdeeb8 = $(`<div id="html_3d99554a671a4bf7f0c058c39ecdeeb8" style="width: 100.0%; height: 100.0%;"><b>Waypoint 3</b><br>Distance: 11.5m</div>`)[0];
+                popup_9f8a5f7be2f0f4bd86f1e5687eae1e57.setContent(html_3d99554a671a4bf7f0c058c39ecdeeb8);
             
         
 
-        marker_59fd90d764d11dd6b4ba65d86236aa62.bindPopup(popup_267d90066737993e6c9ca1f66c04b604)
+        marker_517e8e4d0e24a6331cf0c2f573961ccc.bindPopup(popup_9f8a5f7be2f0f4bd86f1e5687eae1e57)
         ;
 
         
     
     
-            var marker_2131e3e2eb57f44993ef47e45cfee362 = L.marker(
-                [-77.86685284333333, 34.15195394],
+            marker_517e8e4d0e24a6331cf0c2f573961ccc.bindTooltip(
+                `<div>
+                     WP 3: 11.5m
+                 </div>`,
                 {
+  "sticky": true,
 }
-            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+            );
         
     
-            var icon_eeb0badb2faa8b28f354055a34e1eadf = L.AwesomeMarkers.icon(
+            var marker_f6997c70fe6ab76f4e2d6ea8cdda1287 = L.marker(
+                [34.36662283333333, -78.227435],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var div_icon_6dc2e0d4a5e5286b6a713b725b7203f9 = L.divIcon({
+  "html": "\u003cdiv style=\"font-size: 12pt; background-color: rgba(255,255,255,0.7); padding: 3px; border-radius: 3px;\"\u003e9.7m\u003c/div\u003e",
+  "iconSize": [150, 36],
+  "iconAnchor": [75, 0],
+  "className": "empty",
+});
+            marker_f6997c70fe6ab76f4e2d6ea8cdda1287.setIcon(div_icon_6dc2e0d4a5e5286b6a713b725b7203f9);
+        
+    
+            var marker_1362ca7bec27b4a1c12664e1bc5e7ff4 = L.marker(
+                [34.36662283333333, -78.227435],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var icon_b0ca1c3b935078f76549ec915a6f247d = L.AwesomeMarkers.icon(
                 {
   "markerColor": "blue",
   "iconColor": "white",
@@ -380,66 +456,201 @@
   "extraClasses": "fa-rotate-0",
 }
             );
-            marker_2131e3e2eb57f44993ef47e45cfee362.setIcon(icon_eeb0badb2faa8b28f354055a34e1eadf);
+            marker_1362ca7bec27b4a1c12664e1bc5e7ff4.setIcon(icon_b0ca1c3b935078f76549ec915a6f247d);
         
     
-        var popup_ce632409e8950a583af4ae0ffce2f674 = L.popup({
+        var popup_f92b2747475e10748451c061b4148c7c = L.popup({
   "maxWidth": "100%",
 });
 
         
             
-                var html_659874f8ea9bcdee4b24e4efde2d1cfd = $(`<div id="html_659874f8ea9bcdee4b24e4efde2d1cfd" style="width: 100.0%; height: 100.0%;">Waypoint 3</div>`)[0];
-                popup_ce632409e8950a583af4ae0ffce2f674.setContent(html_659874f8ea9bcdee4b24e4efde2d1cfd);
+                var html_af72dba4f96ac98baa367f19c43b43a8 = $(`<div id="html_af72dba4f96ac98baa367f19c43b43a8" style="width: 100.0%; height: 100.0%;"><b>Waypoint 4</b><br>Distance: 9.7m</div>`)[0];
+                popup_f92b2747475e10748451c061b4148c7c.setContent(html_af72dba4f96ac98baa367f19c43b43a8);
             
         
 
-        marker_2131e3e2eb57f44993ef47e45cfee362.bindPopup(popup_ce632409e8950a583af4ae0ffce2f674)
+        marker_1362ca7bec27b4a1c12664e1bc5e7ff4.bindPopup(popup_f92b2747475e10748451c061b4148c7c)
         ;
 
         
     
     
-            var poly_line_4c46bc2201df1e8567a9e6b712da1e89 = L.polyline(
-                [[-77.86700018666667, 34.15195716], [-77.866943845, 34.152101085], [-77.866835825, 34.15205685], [-77.86685284333333, 34.15195394]],
+            marker_1362ca7bec27b4a1c12664e1bc5e7ff4.bindTooltip(
+                `<div>
+                     WP 4: 9.7m
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_a430d8e8f0f55a3fd91fa312cebf6111 = L.marker(
+                [34.366655, -78.227439],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var div_icon_035046070660c6d4d1a516d46d8c13b7 = L.divIcon({
+  "html": "\u003cdiv style=\"font-size: 12pt; background-color: rgba(255,255,255,0.7); padding: 3px; border-radius: 3px;\"\u003e6.1m\u003c/div\u003e",
+  "iconSize": [150, 36],
+  "iconAnchor": [75, 0],
+  "className": "empty",
+});
+            marker_a430d8e8f0f55a3fd91fa312cebf6111.setIcon(div_icon_035046070660c6d4d1a516d46d8c13b7);
+        
+    
+            var marker_4bb2f614fcdf700673e2e54f64db4412 = L.marker(
+                [34.366655, -78.227439],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var icon_11ddc9a083bd37d52d170e8451bcdbab = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "blue",
+  "iconColor": "white",
+  "icon": "flag",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+            marker_4bb2f614fcdf700673e2e54f64db4412.setIcon(icon_11ddc9a083bd37d52d170e8451bcdbab);
+        
+    
+        var popup_fd561273d48089eb225bb5306346fb96 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_225f698b71f77f1d94117a73cdc99d60 = $(`<div id="html_225f698b71f77f1d94117a73cdc99d60" style="width: 100.0%; height: 100.0%;"><b>Waypoint 5</b><br>Distance: 6.1m</div>`)[0];
+                popup_fd561273d48089eb225bb5306346fb96.setContent(html_225f698b71f77f1d94117a73cdc99d60);
+            
+        
+
+        marker_4bb2f614fcdf700673e2e54f64db4412.bindPopup(popup_fd561273d48089eb225bb5306346fb96)
+        ;
+
+        
+    
+    
+            marker_4bb2f614fcdf700673e2e54f64db4412.bindTooltip(
+                `<div>
+                     WP 5: 6.1m
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var poly_line_cd91cb479be4da8ac7d06027a90670c1 = L.polyline(
+                [[34.36671066666667, -78.22745366666666], [34.366741, -78.22741433333333], [34.366610666666666, -78.22740616666667], [34.36661083333333, -78.227409], [34.36662283333333, -78.227435], [34.366655, -78.227439]],
                 {"bubblingMouseEvents": true, "color": "blue", "dashArray": null, "dashOffset": null, "fill": false, "fillColor": "blue", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "noClip": false, "opacity": 0.8, "smoothFactor": 1.0, "stroke": true, "weight": 2.5}
-            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+            ).addTo(map_acce37376e21714f661063f6a392612e);
         
     
-            var marker_fde0618bcde4123124b731df6363a7d0 = L.marker(
-                [-77.86700018666667, 34.15195716],
-                {
-}
-            ).addTo(map_d40690ac805dbb17fe1b3921c103ac60);
+            var circle_marker_a711e2bb684c6e6e4bd393c2e389a788 = L.circleMarker(
+                [34.366709, -78.22745016666667],
+                {"bubblingMouseEvents": true, "color": "black", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "yellow", "fillOpacity": 1.0, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 8, "stroke": true, "weight": 2}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
         
     
-            var icon_efc21deaf80607eaca720493aff31b84 = L.AwesomeMarkers.icon(
-                {
-  "markerColor": "red",
-  "iconColor": "white",
-  "icon": "car",
-  "prefix": "fa",
-  "extraClasses": "fa-rotate-0",
-}
-            );
-            marker_fde0618bcde4123124b731df6363a7d0.setIcon(icon_efc21deaf80607eaca720493aff31b84);
-        
-    
-        var popup_082cd2f56384f49a77c93d674c6cf7ba = L.popup({
+        var popup_7c6bef36b7d61c41e1f1ce2c2f465fb8 = L.popup({
   "maxWidth": "100%",
 });
 
         
             
-                var html_3b68a2fa69a45d15176ad1d3b043ccc5 = $(`<div id="html_3b68a2fa69a45d15176ad1d3b043ccc5" style="width: 100.0%; height: 100.0%;">Rover</div>`)[0];
-                popup_082cd2f56384f49a77c93d674c6cf7ba.setContent(html_3b68a2fa69a45d15176ad1d3b043ccc5);
+                var html_2e40df65e0a7f32b6e9d654ecaad4134 = $(`<div id="html_2e40df65e0a7f32b6e9d654ecaad4134" style="width: 100.0%; height: 100.0%;">Rover position</div>`)[0];
+                popup_7c6bef36b7d61c41e1f1ce2c2f465fb8.setContent(html_2e40df65e0a7f32b6e9d654ecaad4134);
             
         
 
-        marker_fde0618bcde4123124b731df6363a7d0.bindPopup(popup_082cd2f56384f49a77c93d674c6cf7ba)
+        circle_marker_a711e2bb684c6e6e4bd393c2e389a788.bindPopup(popup_7c6bef36b7d61c41e1f1ce2c2f465fb8)
         ;
 
         
     
+    
+            circle_marker_a711e2bb684c6e6e4bd393c2e389a788.bindTooltip(
+                `<div>
+                     ROVER HERE
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var marker_bee978ac6c86bd2d53ed0053120431c5 = L.marker(
+                [34.366709, -78.22745016666667],
+                {
+}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+            var div_icon_23302949a19884d3893b8f2bf4c4dc1c = L.divIcon({
+  "html": "\u003cdiv style=\"font-size: 14pt; font-weight: bold; color: red; text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;\"\u003eROVER\u003c/div\u003e",
+  "iconSize": [100, 36],
+  "iconAnchor": [50, 18],
+  "className": "empty",
+});
+            marker_bee978ac6c86bd2d53ed0053120431c5.setIcon(div_icon_23302949a19884d3893b8f2bf4c4dc1c);
+        
+    
+            var poly_line_c0159b20b79fcaed423772c412588aa4 = L.polyline(
+                [[34.366709, -78.22745016666667], [34.36671066666667, -78.22745366666666]],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": false, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "noClip": false, "opacity": 0.7, "smoothFactor": 1.0, "stroke": true, "weight": 3}
+            ).addTo(map_acce37376e21714f661063f6a392612e);
+        
+    
+        var popup_8b39047a648fad925fa0a0f55e24a7f0 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_73589a52dec54354ba445adce4d82e3e = $(`<div id="html_73589a52dec54354ba445adce4d82e3e" style="width: 100.0%; height: 100.0%;">Distance: 0.37 m</div>`)[0];
+                popup_8b39047a648fad925fa0a0f55e24a7f0.setContent(html_73589a52dec54354ba445adce4d82e3e);
+            
+        
+
+        poly_line_c0159b20b79fcaed423772c412588aa4.bindPopup(popup_8b39047a648fad925fa0a0f55e24a7f0)
+        ;
+
+        
+    
+    
+            var measure_control_7a3bf78d98c8b6fca0bb2d7aafaecb19 = new L.Control.Measure(
+                {
+  "position": "bottomright",
+  "primaryLengthUnit": "meters",
+  "secondaryLengthUnit": "miles",
+  "primaryAreaUnit": "sqmeters",
+  "secondaryAreaUnit": "acres",
+});
+            map_acce37376e21714f661063f6a392612e.addControl(measure_control_7a3bf78d98c8b6fca0bb2d7aafaecb19);
+
+            // Workaround for using this plugin with Leaflet>=1.8.0
+            // https://github.com/ljagis/leaflet-measure/issues/171
+            L.Control.Measure.include({
+                _setCaptureMarkerIcon: function () {
+                    // disable autopan
+                    this._captureMarker.options.autoPanOnFocus = false;
+                    // default function
+                    this._captureMarker.setIcon(
+                        L.divIcon({
+                            iconSize: this._map.getSize().multiplyBy(2)
+                        })
+                    );
+                },
+            });
+
+        
 </script>
 </html>

@@ -13,13 +13,6 @@ logger = logging.getLogger(__name__)
 _motor_controller_instance = None
 
 class MotorController:
-<<<<<<< HEAD
-    def __init__(self, max_speed=0.2, turn_factor=0.9, simulation_mode=False):
-        """Initialize the motor controller with configuration parameters."""
-        self.max_speed = max_speed
-        self.turn_factor = turn_factor
-        self.simulation_mode = simulation_mode
-=======
     def __init__(self, max_speed=0.3, turn_factor=0.7):
         """Initialize the motor controller with configuration parameters.
         
@@ -29,7 +22,6 @@ class MotorController:
         """
         self.max_speed = max_speed
         self.turn_factor = turn_factor  # How much to slow the inside wheel during turns
->>>>>>> gpsd-refactor
         self.left_speed = 0.0
         self.right_speed = 0.0
         self.current_steering = 0.0
@@ -76,56 +68,6 @@ class MotorController:
     
     def set_steering(self, angle_degrees):
         """
-<<<<<<< HEAD
-        Set steering with smooth proportional differential response
-        """
-        # Store current steering
-        self.current_steering = direction_degrees
-        
-        # IMPROVED: Use a smooth, truly proportional response curve
-        # Convert degrees to a normalized differential factor
-        # This gives a nice sigmoidal response curve that's gentle for small angles
-        # but appropriately strong for larger angles
-        
-        # Parameters for response curve
-        max_differential = 0.90   # Maximum differential at extreme angles
-        sensitivity = 0.05        # Higher = more sensitive to small angles
-        
-        # Calculate normalized differential factor using sigmoid-like function
-        # This creates a smooth S-curve response from 0 to max_differential
-        normalized_angle = abs(direction_degrees) / 45.0  # Normalize to [0,1] range at 45 degrees
-        differential_factor = max_differential * (normalized_angle / (sensitivity + normalized_angle))
-        
-        # Calculate motor speeds with true proportional response
-        base_speed = self.max_speed
-        
-        if direction_degrees < 0:  # LEFT TURN
-            # Left turn: reduce left motor proportionally
-            left_factor = 1.0 - differential_factor
-            right_factor = 1.0
-            logger.info(f"LEFT TURN: {direction_degrees:.1f}° (differential: {differential_factor:.3f})")
-        elif direction_degrees > 0:  # RIGHT TURN
-            # Right turn: reduce right motor proportionally
-            left_factor = 1.0
-            right_factor = 1.0 - differential_factor
-            logger.info(f"RIGHT TURN: {direction_degrees:.1f}° (differential: {differential_factor:.3f})")
-        else:  # STRAIGHT
-            # Perfectly straight
-            left_factor = 1.0
-            right_factor = 1.0
-        
-        # Calculate final motor speeds
-        left_speed = base_speed * left_factor
-        right_speed = base_speed * right_factor
-        
-        # Add diagnostic output to understand response curve
-        logger.info(f"Motor speeds: L={left_speed:.3f}, R={right_speed:.3f}, Ratio: {left_speed/right_speed if right_speed > 0 else 'inf':.3f}")
-        
-        # Store and apply motor speeds
-        self.left_speed = left_speed
-        self.right_speed = right_speed
-        self._apply_motor_speeds()
-=======
         Set steering angle in degrees (-90 to +90)
         Positive angle turns right, negative angle turns left
         """
@@ -186,7 +128,6 @@ class MotorController:
         self.right_speed = right_speed
         
         logger.info(f"Applying to motors - Left: {self.left_speed:.2f}, Right: {self.right_speed:.2f}")
->>>>>>> gpsd-refactor
         
         # Set the motors
         try:
@@ -326,13 +267,8 @@ class MotorController:
 def get_motor_controller(max_speed=0.3, turn_factor=2):  # Change from 0.2 to 0.3
     """Get a singleton instance of the motor controller."""
     global _motor_controller_instance
-<<<<<<< HEAD
-    if (_motor_controller_instance is None):
-        _motor_controller_instance = MotorController()
-=======
     if _motor_controller_instance is None:
         _motor_controller_instance = MotorController(max_speed=max_speed, turn_factor=turn_factor)
->>>>>>> gpsd-refactor
     return _motor_controller_instance
 
 # Legacy compatibility functions

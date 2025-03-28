@@ -6,7 +6,133 @@ import os
 import sys
 import traceback
 import math
+import datetime
+import logging
+import json
+import threading
+from pathlib import Path
 from enum import Enum
+import argparse
+
+# Create a variable to store the latest detection data - define this at the module level
+latest_detection_data = None
+
+# Add these variables at the top after initializing frame_counter
+frame_counter = 0
+last_processed_time = 0
+consecutive_timeouts = 0  # Track camera timeouts
+last_successful_frame = time.time()  # Track when we last got a frame
+MAX_TIMEOUTS = 5  # How many timeouts before attempting recovery
+
+# Import Flask for API
+from flask import Flask, jsonify
+from flask_cors import CORS
+
+# Create Flask app - no static folder needed for API only
+app = Flask(__name__)
+CORS(app)  # Allow cross-origin requests
+
+# Shared variable for latest detection data
+latest_detection_data = None
+
+# API endpoint to get detection data
+@app.route('/api/detections', methods=['GET'])
+def get_detections():
+    global latest_detection_data
+    if latest_detection_data:
+        return jsonify(latest_detection_data)
+    else:
+        return jsonify({"error": "No detection data available yet"})
+
+# That's it - no other routes needed!
+
+# Function to run Flask server in a separate thread
+def run_flask_server():
+    print(f"Starting API server on port 5000...", file=sys.__stdout__)
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
+# Start the flask server in a thread
+threading.Thread(target=run_flask_server, daemon=True).start()
+
+# Function to process objects as JSON data
+def process_objects_json(objects_data):
+    """Process detected objects as JSON data structure"""
+    # Convert any numpy values to Python native types
+    def convert_numpy(obj):
+        if isinstance(obj, (np.integer, np.floating)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, ObstructionType):
+            return obj.name  # Convert enum to string
+        return obj
+    
+    # Clean the data for JSON serialization
+    clean_data = []
+    for obj in objects_data:
+        clean_obj = {}
+        for key, value in obj.items():
+            # Apply convert_numpy to ALL values, not just specific keys
+            clean_obj[key] = convert_numpy(value)
+        clean_data.append(clean_obj)
+    
+    # Create the output structure with frame info
+    output = {
+        "frame_id": frame_counter if 'frame_counter' in globals() else 0,
+        "timestamp": time.time(),
+        "objects": clean_data
+    }
+    
+    return output
+
+# Function to get the latest detection data for API access
+def get_latest_detection():
+    """Return the latest detection data for API access"""
+    global latest_detection_data
+    return latest_detection_data
+
+# First, ensure logging is properly configured before anything else
+def setup_logging():
+    """Configure more detailed logging"""
+    script_dir = Path(__file__).parent.absolute()
+    log_dir = script_dir / "logs"
+    log_dir.mkdir(exist_ok=True)
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"detection_{timestamp}.log"
+    
+    # Configure more detailed logging with multiple levels
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.INFO,  # Set to DEBUG for even more details
+        format='%(asctime)s | %(levelname)s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    print(f"All output redirected to: {log_file}", file=sys.__stdout__)
+    return log_file
+
+# Initialize logging before anything else
+log_file_path = setup_logging()
+logging.info("Logging initialized")
+print(f"Logging to: {log_file_path}", file=sys.__stdout__)
+
+# Function to print JSON to console and update latest_detection_data
+def print_objects_json(objects_data):
+    """Process detection data and make it available to API"""
+    global latest_detection_data
+    
+    try:
+        # Update the global variable for API access
+        latest_detection_data = process_objects_json(objects_data)
+        
+        # Log the data for debugging
+        logging.debug(f"Updated detection data with {len(objects_data)} objects")
+        
+        # Also print to console in compact form
+        print(f"Detected {len(objects_data)} objects for API", file=sys.__stdout__, flush=True)
+    except Exception as e:
+        print(f"ERROR processing JSON: {str(e)}", file=sys.__stdout__)
 
 # Define obstruction types
 class ObstructionType(Enum):
@@ -26,7 +152,7 @@ def calculate_angle(x, width, hfov=66):  # 66° is typical for RealSense
     return angle
 
 def create_top_down_view(width, height, objects, max_distance=5.0):
-    """Create a top-down view visualization of obstacles and objects"""
+    """Create a top-down view visualization with size-accurate object representation"""
     # Create a blank top-down view image (dark gray background)
     top_view = np.zeros((height, width, 3), dtype=np.uint8)
     top_view[:] = (30, 30, 30)  # Dark gray background
@@ -52,7 +178,7 @@ def create_top_down_view(width, height, objects, max_distance=5.0):
     # Draw camera position
     cv2.circle(top_view, (center_x, center_y), 5, (0, 255, 0), -1)
     
-    # Draw objects
+    # Draw objects with size-scaled markers
     for obj in objects:
         distance = obj["distance"]
         # Skip if no angle data
@@ -67,35 +193,41 @@ def create_top_down_view(width, height, objects, max_distance=5.0):
         
         if distance > 0 and distance <= max_distance:
             # Convert to cartesian coordinates
-            # FIXED: Remove the negative sign here to correct the orientation
-            rad = math.radians(angle)  # Removed the negation that was causing the reversal
+            rad = math.radians(angle)
             x = int(center_x + distance * (height - 40) / max_distance * math.sin(rad))
             y = int(center_y - distance * (height - 40) / max_distance * math.cos(rad))
             
-            # Choose color based on object type
+            # Calculate marker size based on object width/size
+            base_size = 4
+            
+            # For YOLO objects, use bounding box width
             if is_yolo:
-                # Use blue for YOLO detections
                 color = (255, 0, 0)  # Blue
-                marker_size = 7  # Slightly larger marker
+                obj_width = obj.get("width", 0)
+                # Scale by distance (objects appear smaller when farther)
+                width_scaled = obj_width / max(distance * 100, 1)
+                marker_size = base_size + min(int(width_scaled), 12)
+            # For persistent objects
             elif is_persistent:
-                # Use purple for persistent objects
                 color = (255, 0, 255)  # Purple
-                marker_size = 6
-            elif group_id == 0:
-                # Default color for ungrouped objects
-                color = (255, 255, 255)  # White
-                marker_size = 5
-            else:
-                # Use the same color generation logic as in the main visualization
-                np.random.seed(group_id)  # Ensure consistent colors
+                obj_size = obj.get("size", 0)
+                marker_size = base_size + min(int(obj_size / 2), 10)
+            # For grouped grid objects
+            elif group_id > 0:
+                np.random.seed(group_id)
                 color = (
                     np.random.randint(100, 256),
                     np.random.randint(100, 256),
                     np.random.randint(100, 256)
                 )
-                marker_size = 5
+                obj_size = obj.get("size", 0)
+                marker_size = base_size + min(int(obj_size / 2), 8)
+            # Default for ungrouped objects
+            else:
+                color = (255, 255, 255)  # White
+                marker_size = base_size
             
-            # Draw marker
+            # Draw marker with size-appropriate representation
             cv2.circle(top_view, (x, y), marker_size, color, -1)
             
             # Add short label and distance
@@ -103,20 +235,8 @@ def create_top_down_view(width, height, objects, max_distance=5.0):
             cv2.putText(top_view, label_text, (x+5, y), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
     
-    # Add legend for object types
-    legend_y = 30
-    # Grid objects
-    cv2.circle(top_view, (width-25, legend_y), 5, (150, 150, 150), -1)
-    cv2.putText(top_view, "Grid", (width-70, legend_y+5), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-    # YOLO objects
-    cv2.circle(top_view, (width-25, legend_y+20), 7, (255, 0, 0), -1)
-    cv2.putText(top_view, "YOLO", (width-70, legend_y+25), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-    # Persistent objects
-    cv2.circle(top_view, (width-25, legend_y+40), 6, (255, 0, 255), -1)
-    cv2.putText(top_view, "Persistent", (width-70, legend_y+45), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+    # Add legend for object types (rest of legend code unchanged)
+    # ...
     
     return top_view
 
@@ -385,7 +505,7 @@ def create_distance_grid_visualization(depth_frame, depth_scale, grid_size=20, h
     # Position top-down view in bottom-right corner
     result[height-top_down_size:height, width-top_down_size:width] = top_down
     
-    return result
+    return result, top_down_objects
 
 # Check if the required files exist
 required_files = ["yolov3-tiny.weights", "yolov3-tiny.cfg", "coco.names"]
@@ -399,11 +519,35 @@ print("Initializing camera...")
 pipeline = rs.pipeline()
 config = rs.config()
 
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='RealSense object detection with distance grid')
+    
+    # Create mutually exclusive group (can't use both flags together)
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--sim', action='store_true', 
+                          help='Simulation mode: Show visualization windows (default)')
+    mode_group.add_argument('--real', action='store_true',
+                          help='Real mode: No visualization, only console output')
+    
+    args = parser.parse_args()
+    
+    # If neither flag is specified, default to --sim mode
+    if not args.sim and not args.real:
+        args.sim = True
+    
+    return args
+
+# Add this right after the imports and logging setup
+args = parse_arguments()
+show_visualization = args.sim
+print(f"Running in {'simulation' if show_visualization else 'real'} mode", file=sys.__stdout__)
+
 try:
     # First add depth stream (this works in simple_depth)
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 6)
     # Then try adding color stream
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 6)
     
     # Start streaming
     print("Starting camera pipeline...")
@@ -437,13 +581,79 @@ try:
         classes = [line.strip() for line in f.readlines()]
     print(f"Loaded {len(classes)} classes")
     
+    # Add this line before starting the detection loop (around line 567)
+    frame_counter = 0
+
+    # Add this near the top of your main code, after initializing frame_counter
+    frame_counter = 0
+    last_processed_time = 0  # Track when we last processed a frame
+
     print("Starting detection loop...")
     try:
-        while True:
-            # Wait for frames
-            frames = pipeline.wait_for_frames(timeout_ms=5000)
+        while True:  # KEEP ONLY THIS OUTER LOOP
+            # Increment counter at the beginning of each loop iteration
+            frame_counter += 1
+            
+            current_time = time.time()
+            
+            # In real mode, throttle by sleeping longer between frames
+            if not show_visualization:
+                if current_time - last_processed_time < 0.5:
+                    time.sleep(0.1)
+                    continue
+            
+            last_processed_time = current_time
+            
+            # Check if camera has been failing for too long
+            if current_time - last_successful_frame > 30:  # 30 seconds without frames
+                print("Camera appears frozen for 30+ seconds. Attempting recovery...", file=sys.__stdout__)
+                try:
+                    # Stop and restart the pipeline
+                    pipeline.stop()
+                    time.sleep(1)
+                    profile = pipeline.start(config)
+                    consecutive_timeouts = 0
+                    print("Camera pipeline restarted successfully", file=sys.__stdout__)
+                except Exception as e:
+                    print(f"Error during recovery: {e}", file=sys.__stdout__)
+                    time.sleep(5)  # Wait longer before retry
+                    continue
+            
+            # Wait for frames with proper timeout handling
+            try:
+                timeout_ms = 1000 if show_visualization else 5000
+                frames = pipeline.wait_for_frames(timeout_ms=timeout_ms)
+                
+                # We got frames successfully, reset timeout counter
+                consecutive_timeouts = 0
+                last_successful_frame = time.time()
+                
+            except RuntimeError as e:
+                # Handle frame timeout
+                consecutive_timeouts += 1
+                print(f"Frame timeout #{consecutive_timeouts}: {str(e)}", file=sys.__stdout__)
+                
+                if consecutive_timeouts >= MAX_TIMEOUTS:
+                    print(f"Experienced {consecutive_timeouts} consecutive timeouts, attempting recovery...", file=sys.__stdout__)
+                    try:
+                        # Stop and restart the pipeline
+                        pipeline.stop()
+                        time.sleep(1)
+                        profile = pipeline.start(config)
+                        print("Camera pipeline restarted successfully", file=sys.__stdout__)
+                    except Exception as recovery_error:
+                        print(f"Recovery failed: {recovery_error}", file=sys.__stdout__)
+                    
+                    # Reset counter even if recovery failed (to avoid endless restart loop)
+                    consecutive_timeouts = 0
+                
+                # Skip this iteration and try again
+                time.sleep(0.5)  # Add a small delay before retry
+                continue
+            
             if not frames:
-                print("No frames received")
+                print("No frames received", file=sys.__stdout__)
+                time.sleep(0.1)
                 continue
             
             # Try to align frames safely
@@ -506,7 +716,7 @@ try:
                     indexes = indexes.flatten() if isinstance(indexes, np.ndarray) else indexes
                     
                     for i in indexes:
-                        x, y, w, h = boxes[i]
+                        x, y, w, h = boxes[i]  # Properly unpack all 4 values
                         label = str(classes[class_ids[i]])
                         confidence = confidences[i]
                         
@@ -537,54 +747,164 @@ try:
                 except Exception as e:
                     print(f"Error in NMS or drawing: {e}")
             
-            # Call grid visualization ONCE
-            grid_vis = create_distance_grid_visualization(depth_frame, depth_scale, grid_size=20, 
-                                                        highlight_threshold=3.0, yolo_objects=yolo_objects)
+            # Replace all window creation and display with conditional code
 
-            # Show original object detection
+            # At the beginning of the main loop, modify your code to check mode:
+            # Process the depth and color frames as before
+            # ...
+            
+            # Only create visualizations if in sim mode (to save CPU)
+            if show_visualization:
+                # Call grid visualization
+                grid_vis, top_down_objects = create_distance_grid_visualization(depth_frame, depth_scale, 
+                                            grid_size=20, highlight_threshold=3.0, yolo_objects=yolo_objects)
+                
+                # Show windows
+                try:
+                    if grid_vis.shape[0] == color_image.shape[0]:
+                        images = np.hstack((color_image, grid_vis))
+                    else:
+                        h, w, _ = color_image.shape
+                        grid_vis_resized = cv2.resize(grid_vis, (int(w * (grid_vis.shape[0] / color_image.shape[0])), h))
+                        images = np.hstack((color_image, grid_vis_resized))
+                    
+                    cv2.namedWindow('RealSense Object Detection', cv2.WINDOW_AUTOSIZE)
+                    cv2.imshow('RealSense Object Detection', images)
+                    
+                    key = cv2.waitKey(1)
+                    if key == 27:  # ESC key
+                        print("ESC pressed, exiting...")
+                        break
+                except Exception as e:
+                    print(f"Error displaying visualization: {e}")
+            else:
+                # In real mode, just process data without any visualization or key checking
+                _, top_down_objects = create_distance_grid_visualization(depth_frame, depth_scale,
+                                      grid_size=20, highlight_threshold=3.0, yolo_objects=yolo_objects)
+                # No waitKey call here!if 
+                if cv2.waitKey(1) & 0xFF == 27:
+                    print("ESC pressed, exiting...")
+                    break
+            
+            # After YOLO detection
             try:
-                # Replace this:
-                # if depth_colormap.shape[0] == color_image.shape[0]:
-                #     images = np.hstack((color_image, depth_colormap))
-                
-                # With this (use grid_vis which is the return value from your function):
-                if grid_vis.shape[0] == color_image.shape[0]:
-                    images = np.hstack((color_image, grid_vis))
+                if 'yolo_objects' in locals() and yolo_objects:
+                    logging.info(f"Detected {len(yolo_objects)} YOLO objects: {[obj.get('label', 'unknown') for obj in yolo_objects]}")
                 else:
-                    # Resize to match height
-                    h, w, _ = color_image.shape
-                    grid_vis_resized = cv2.resize(grid_vis, (int(w * (grid_vis.shape[0] / color_image.shape[0])), h))
-                    images = np.hstack((color_image, grid_vis_resized))
+                    logging.info("No YOLO objects detected in this frame")
             except Exception as e:
-                print(f"Error stacking images: {e}")
-                images = color_image  # Fallback to just showing color image
+                logging.error(f"Error logging YOLO objects: {e}")
+
+            # After processing a frame (use variables that definitely exist):
+            try:
+                logging.info(f"Processed frame #{frame_counter}")
+            except Exception as e:
+                logging.error(f"Error in frame logging: {e}")
+
+            # For any important events, use safe logging:
+            try:
+                # [your event code]
+                logging.info("Important event happened")
+            except Exception as e:
+                logging.error(f"Error processing event: {e}")
+
+            # Define a safe logging function
+            def safe_log(level, message):
+                """Log safely without crashing if something goes wrong"""
+                try:
+                    if level == "error":
+                        logging.error(message)
+                    elif level == "warning":
+                        logging.warning(message)
+                    else:
+                        logging.info(message)
+                except Exception as e:
+                    print(f"Logging error: {e}", file=sys.__stdout__)
+
+            # Use this safe function instead of direct logging calls
+            safe_log("info", f"Processing frame #{frame_counter}")
+
+            # After grid processing
+            logging.info(f"Processed grid with {len(top_down_objects) if 'top_down_objects' in locals() else 0} objects")
+            
+            # For any interesting events
+            for obj in yolo_objects:
+                distance = obj["distance"]
+                if distance < 1.0:  # Very close object
+                    logging.warning(f"Close object detected: {obj['label']} at {distance:.2f}m")
+            
+            # After processing YOLO objects and grid objects, combine and output
+            # This remains the same in both modes
+            all_objects = []
+            
+            # Add YOLO objects to the list
+            for obj in yolo_objects:
+                obj_copy = obj.copy()
+                obj_copy["type"] = "yolo"
+                all_objects.append(obj_copy)
+            
+            # Add grid objects to the list
+            for obj in top_down_objects:
+                obj_copy = obj.copy()
+                obj_copy["type"] = "grid"
+                all_objects.append(obj_copy)
+            
+            # Process objects and update global variable for API
+            if all_objects:
+                processed_data = process_objects_json(all_objects)
+                latest_detection_data = processed_data  # Update the variable the API will serve
                 
-            # Show both windows
-            cv2.namedWindow('RealSense Object Detection', cv2.WINDOW_AUTOSIZE)
-            cv2.imshow('RealSense Object Detection', images)
-            
-            cv2.namedWindow('Distance Grid', cv2.WINDOW_AUTOSIZE)
-            cv2.imshow('Distance Grid', grid_vis)
-            
-            key = cv2.waitKey(1)
-            if key == 27:  # ESC key
-                print("ESC pressed, exiting...")
-                break
+                # Just print summary to console (no double processing)
+                print(f"Detected {len(all_objects)} objects for API", file=sys.__stdout__, flush=True)
                 
     except KeyboardInterrupt:
         print("Keyboard interrupt, stopping...")
-    
-except Exception as e:
-    print(f"Setup error: {e}")
-    traceback.print_exc()
+            
+    except Exception as e:
+        logging.error(f"Failed to process frame {frame_counter}: {str(e)}")
+        logging.debug(traceback.format_exc())  # Full stack trace at DEBUG level
+        print(f"Setup error: {e}")
+        traceback.print_exc()
     
 finally:
     # Stop streaming
-    print("Stopping pipeline...")
+    logging.info("Stopping pipeline...")
     try:
         pipeline.stop()
     except Exception as e:
-        print(f"Error stopping pipeline: {e}")
-        
-    cv2.destroyAllWindows()
-    print("Pipeline stopped, windows closed")
+        logging.error(f"Error stopping pipeline: {e}")
+    
+    # Only destroy windows if we created them
+    if show_visualization:
+        cv2.destroyAllWindows()
+    
+    logging.info("Pipeline stopped, windows closed")
+    
+    # Restore standard output/error streams
+    sys.stdout = sys.__stdout__
+    sys.stderr = sys.__stderr__
+    print(f"Session completed. Log file saved to: {log_file_path}")
+
+if __name__ == "__main__":
+    # Parse command line arguments
+    args = parse_arguments()
+    show_visualization = args.sim
+    
+    # Start the API server in a separate thread
+    api_thread = threading.Thread(target=run_flask_server, daemon=True)
+    api_thread.start()
+    print(f"API server started at http://localhost:5000", file=sys.__stdout__)
+    
+    # Near the beginning of your script, after setting up logging
+    # Start the API server in a separate thread
+    api_thread = threading.Thread(target=run_flask_server, daemon=True)
+    api_thread.start()
+    print(f"API server running at http://localhost:5000/api/detections", file=sys.__stdout__)
+
+    try:
+        # Continue with the main detection loop
+        # ...existing code...
+        pass
+    finally:
+        # ...existing code...
+        pass

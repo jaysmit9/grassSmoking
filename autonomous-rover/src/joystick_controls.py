@@ -105,32 +105,40 @@ class JoystickHandler:
     
     def start(self):
         """Start the control handler."""
+        if self.running:
+            logger.info("Control handler already running")
+            return True
+        
+        self.running = True
         if self.use_keyboard_fallback:
             logger.info("Starting keyboard fallback control")
             self.keyboard_handler.start()
-            self.running = True
-            return True
         elif not self.joystick:
             logger.error("Cannot start joystick handler - no joystick initialized")
+            self.running = False
             return False
         
-        self.running = True
         logger.info("Joystick handler started")
         return True
     
     def stop(self):
         """Stop the control handler."""
+        if not self.running:
+            logger.info("Control handler is already stopped")0
+            return
+        
         self.running = False
         self.motor.stop()
         
         if self.use_keyboard_fallback and self.keyboard_handler:
+            logger.info("Stopping keyboard fallback control")
             self.keyboard_handler.stop()
         else:
             try:
                 pygame.joystick.quit()
                 pygame.quit()
-            except:
-                pass  # Ignore pygame cleanup errors
+            except Exception as e:
+                logger.error(f"Error during pygame cleanup: {e}")
                 
         logger.info("Control handler stopped")
     
@@ -147,17 +155,13 @@ class JoystickHandler:
         
         # Process joystick events
         try:
-            # Process pygame events
             pygame.event.pump()
             
             # Get joystick axis values
             y_axis = self.joystick.get_axis(1)
             x_axis = self.joystick.get_axis(0)
             
-            # Apply the same approach as in keyboard_handler for smooth controls
-            
             # Speed control (Y-axis inverted as pushing forward is negative)
-            # Scale y_axis which is -1.0 to 1.0 to the speed range
             target_speed = -y_axis * self.max_speed * self.speed_factor
             
             # Apply speed changes gradually for smoother control
@@ -167,35 +171,28 @@ class JoystickHandler:
                 else:
                     self.current_speed = max(self.current_speed - 0.05, target_speed)
                 
-                # Apply the new speed
                 self.motor.set_speed(self.current_speed)
                 logger.debug(f"Speed: {self.current_speed:.2f}")
             
             # Steering control (X-axis)
             if abs(x_axis) > self.steering_deadzone:
-                # Map joystick position to steering positions (-2 to +2)
-                # This makes joystick control more compatible with keyboard control
-                if abs(x_axis) > 0.75:  # Strong turn
+                if abs(x_axis) > 0.75:
                     steering_position = 2 if x_axis > 0 else -2
-                elif abs(x_axis) > 0.25:  # Medium turn
+                elif abs(x_axis) > 0.25:
                     steering_position = 1 if x_axis > 0 else -1
-                else:  # Light turn or deadzone
+                else:
                     steering_position = 0
                 
-                # Only update steering if position changed
                 if steering_position != self.motor.steering_position:
                     if steering_position > self.motor.steering_position:
-                        # Need to turn more right
                         while self.motor.steering_position < steering_position:
                             self.motor.steer_right()
                     else:
-                        # Need to turn more left
                         while self.motor.steering_position > steering_position:
                             self.motor.steer_left()
                     
                     logger.debug(f"Steering position: {self.motor.steering_position}")
             elif abs(x_axis) <= self.steering_deadzone and self.motor.steering_position != 0:
-                # Center steering if joystick is in deadzone and we're not already centered
                 self.motor.center_steering()
                 logger.debug("Steering centered")
             

@@ -41,18 +41,19 @@ class KeyboardHandler:
     def stop(self):
         """Stop the keyboard handler."""
         self.running = False
-        if self.thread:
-            self.thread.join(timeout=1.0)
-        
-        if self.stdscr:
+        if self.thread is not None and self.thread != threading.current_thread():
             try:
-                curses.nocbreak()
-                self.stdscr.keypad(False)
-                curses.echo()
-                curses.endwin()
-                self.stdscr = None
-            except:
-                pass  # If curses cleanup fails, just continue
+                self.thread.join(timeout=1.0)
+            except RuntimeError as e:
+                logger.error(f"Error stopping thread: {e}")
+        
+        # Clean up curses
+        if self.stdscr is not None:
+            curses.nocbreak()
+            self.stdscr.keypad(False)
+            curses.echo()
+            curses.endwin()
+            self.stdscr = None
         
         logger.info("Keyboard handler stopped")
     

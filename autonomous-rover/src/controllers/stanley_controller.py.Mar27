@@ -1,0 +1,577 @@
+import numpy as np
+import math
+import json
+import logging
+import requests  # Add requests for API calls
+import time  # For API retry logic
+from shapely.geometry import LineString, Point
+
+# Configure logging
+logger = logging.getLogger("rover.controllers")
+
+# Define GPS API URL - adjust port if needed
+GPS_API_BASE_URL = "http://localhost:5001/api"
+
+class StanleyController:
+    def __init__(self, waypoints, k=6.0, k_e=0.2, L=1.0, max_steer=0.8726645886, 
+                 waypoint_reach_threshold=3.0, steering_sensitivity=np.pi/3,
+                 gps_monitor=None, motor_controller=None, use_api=True):
+        """
+        Initialize the Stanley Controller.
+        
+        Args:
+            waypoints: Array of waypoint coordinates (lat, lon)
+            k: Heading gain
+            k_e: Cross-track error gain  
+            L: Vehicle wheelbase length
+            max_steer: Maximum steering angle in radians
+            waypoint_reach_threshold: Distance in meters to consider a waypoint reached
+            steering_sensitivity: Controls steering response curve (smaller = more aggressive)
+            gps_monitor: Optional GPS monitor instance
+            motor_controller: Optional motor controller instance
+            use_api: Whether to use the GPS API for calculations
+        """
+        self.waypoints = waypoints
+        self.k = k
+        self.k_e = k_e
+        self.L = L
+        self.max_steer = max_steer
+        self.waypoint_reach_threshold = waypoint_reach_threshold
+        self.steering_sensitivity = steering_sensitivity  # Store the new parameter
+        self.target_idx = 1
+        self.prev_delta = 0.0
+        self.use_api = use_api
+        
+        # API request cache to reduce duplicate calls
+        self.distance_cache = {}
+        self.api_failures = 0
+        self.max_api_failures = 5  # Switch to local calculation after this many failures
+        
+        # Store optional components
+        self.gps_monitor = gps_monitor
+        self.motor_controller = motor_controller
+        
+        # Tracking state
+        self.first_call = True
+        self.waypoint_0_visited = False
+        
+        # Debug info
+        logger.info(f"Stanley controller initialized with {len(waypoints)} waypoints")
+        logger.info(f"Controller gains: k={k} (heading), k_e={k_e} (CTE)")
+        logger.info(f"Max steering angle: {np.degrees(max_steer):.1f}°")
+        logger.info(f"Waypoint reach threshold: {waypoint_reach_threshold} meters")
+        logger.info(f"Using GPS API for calculations: {use_api}")
+        logger.info(f"GPS monitor: {'Provided' if gps_monitor else 'None'}")
+        logger.info(f"Motor controller: {'Provided' if motor_controller else 'None'}")
+
+    def haversine_distance(self, coord1, coord2):
+        """
+        Calculate the great circle distance between two points in meters.
+        Uses the GPS API if available, falls back to local calculation.
+        
+        Args:
+            coord1: Tuple of (lat, lon) for first point
+            coord2: Tuple of (lat, lon) for second point
+            
+        Returns:
+            float: Distance in meters
+        """
+        # Extract coordinates
+        lat1, lon1 = coord1
+        lat2, lon2 = coord2
+        
+        # Generate cache key
+        cache_key = f"{lat1:.7f},{lon1:.7f}-{lat2:.7f},{lon2:.7f}"
+        
+        # Check cache first
+        if cache_key in self.distance_cache:
+            return self.distance_cache[cache_key]['distance']
+            
+        # Use API if enabled and we haven't had too many failures
+        if self.use_api and self.api_failures < self.max_api_failures:
+            try:
+                response = requests.get(
+                    f"{GPS_API_BASE_URL}/gps/distance",
+                    params={
+                        "lat1": lat1,
+                        "lon1": lon1,
+                        "lat2": lat2,
+                        "lon2": lon2
+                    },
+                    timeout=0.5  # Short timeout for navigation
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success'):
+                        # Store in cache
+                        self.distance_cache[cache_key] = {
+                            'distance': data['distance']['meters'],
+                            'bearing': data['bearing']['degrees']
+                        }
+                        return data['distance']['meters']
+                
+                # If we get here, API call failed
+                self.api_failures += 1
+                if self.api_failures >= self.max_api_failures:
+                    logger.warning(f"Too many API failures ({self.api_failures}), switching to local calculations")
+                    
+            except Exception as e:
+                self.api_failures += 1
+                logger.warning(f"API call failed ({self.api_failures}/{self.max_api_failures}): {e}")
+        
+        # Fall back to local calculation
+        try:
+            # Import locally to avoid overhead if using API
+            from geopy.distance import geodesic
+            distance = geodesic((lat1, lon1), (lat2, lon2)).meters
+            
+            # Cache the result anyway
+            self.distance_cache[cache_key] = {
+                'distance': distance,
+                'bearing': None  # We didn't calculate bearing here
+            }
+            
+            # DEBUG logging if distance is unreasonably large
+            if distance > 10000:  # 10km threshold for debugging
+                logger.debug(f"Large distance detected: {distance:.1f}m")
+                logger.debug(f"Coordinates: {(lat1, lon1)} to {(lat2, lon2)}")
+                
+            return distance
+                
+        except Exception as e:
+            logger.error(f"Error in haversine_distance: {e}")
+            return 0.0
+
+    def _calculate_bearing(self, lat1, lon1, lat2, lon2):
+        """
+        Calculate bearing between two points.
+        Uses the GPS API if available, falls back to local calculation.
+        Returns bearing in degrees (0-360).
+        """
+        # Generate cache key
+        cache_key = f"{lat1:.7f},{lon1:.7f}-{lat2:.7f},{lon2:.7f}"
+        
+        # Check if we already have this in cache from a distance calculation
+        if cache_key in self.distance_cache and self.distance_cache[cache_key]['bearing'] is not None:
+            return self.distance_cache[cache_key]['bearing']
+            
+        # Use API if enabled and we haven't had too many failures
+        if self.use_api and self.api_failures < self.max_api_failures:
+            try:
+                response = requests.get(
+                    f"{GPS_API_BASE_URL}/gps/distance",
+                    params={
+                        "lat1": lat1,
+                        "lon1": lon1,
+                        "lat2": lat2,
+                        "lon2": lon2
+                    },
+                    timeout=0.5  # Short timeout for navigation
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success'):
+                        # Store both distance and bearing in cache
+                        self.distance_cache[cache_key] = {
+                            'distance': data['distance']['meters'],
+                            'bearing': data['bearing']['degrees']
+                        }
+                        return data['bearing']['degrees']
+                
+                # If we get here, API call failed
+                self.api_failures += 1
+                        
+            except Exception as e:
+                self.api_failures += 1
+                logger.debug(f"API bearing calculation failed: {e}")
+        
+        # Fall back to local calculation
+        try:
+            # Convert decimal degrees to radians
+            lat1_rad = math.radians(lat1)
+            lon1_rad = math.radians(lon1)
+            lat2_rad = math.radians(lat2)
+            lon2_rad = math.radians(lon2)
+            
+            # Calculate bearing
+            dlon = lon2_rad - lon1_rad
+            y = math.sin(dlon) * math.cos(lat2_rad)
+            x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon)
+            bearing_rad = math.atan2(y, x)
+            
+            # Convert to degrees and normalize to 0-360
+            bearing_deg = (math.degrees(bearing_rad) + 360) % 360
+            
+            # Cache the result
+            if cache_key in self.distance_cache:
+                self.distance_cache[cache_key]['bearing'] = bearing_deg
+            else:
+                self.distance_cache[cache_key] = {
+                    'distance': None,  # We didn't calculate distance here
+                    'bearing': bearing_deg
+                }
+            
+            return bearing_deg
+            
+        except Exception as e:
+            logger.error(f"Error in local bearing calculation: {e}")
+            return 0.0
+
+    def stanley_control(self, x, y, yaw, v):
+        """
+        Stanley controller implementation.
+        
+        Args:
+            x: longitude
+            y: latitude
+            yaw: heading in radians
+            v: speed in m/s
+            
+        Returns:
+            steering_angle, target_index, distance_to_target, cross_track_error, heading_error
+        """
+        # Normalize yaw to 0-2π range
+        yaw = yaw % (2 * np.pi)
+        current_heading_deg = np.degrees(yaw) % 360
+        
+        # Find target waypoint
+        old_target = self.target_idx
+        self.target_idx = self._find_target_waypoint(x, y, self.target_idx)
+        
+        # Log waypoint changes
+        if old_target != self.target_idx:
+            logger.info(f"Target waypoint changed from {old_target} to {self.target_idx}")
+        
+        # Get current and previous waypoint
+        current_point = self.waypoints[self.target_idx]
+        prev_idx = max(0, self.target_idx - 1)
+        prev_point = self.waypoints[prev_idx]
+        
+        # Calculate distance to target
+        distance = self.haversine_distance((y, x), (current_point[0], current_point[1]))
+        
+        # Emergency debug for unreasonable distances
+        if distance > 10000:  # 10km threshold
+            logger.error(f"\n‼️ UNREASONABLE DISTANCE DETECTED: {distance:.1f}m to waypoint {self.target_idx}")
+            logger.error(f"Current position (y,x): ({y:.7f}, {x:.7f})")
+            logger.error(f"Target waypoint (0,1): ({current_point[0]:.7f}, {current_point[1]:.7f})")
+            
+            # Try alternative coordinate orders
+            alt_distance1 = self.haversine_distance((x, y), (current_point[0], current_point[1]))
+            logger.error(f"Alternative distance (x,y) to wp: {alt_distance1:.1f}m")
+            
+            alt_distance2 = self.haversine_distance((y, x), (current_point[1], current_point[0]))
+            logger.error(f"Alternative distance (y,x) to (wp[1],wp[0]): {alt_distance2:.1f}m")
+            
+            # If one of these looks better, suggest the fix
+            if alt_distance1 < 10000:
+                logger.error("LIKELY FIX: Swap position coordinates (x,y) when calling haversine_distance")
+                logger.error("Modify to: self.haversine_distance((x, y), (current_point[0], current_point[1]))")
+                # Use the better distance
+                distance = alt_distance1
+            elif alt_distance2 < 10000:
+                logger.error("LIKELY FIX: Swap waypoint indexes when calling haversine_distance")
+                logger.error("Modify to: self.haversine_distance((y, x), (current_point[1], current_point[0]))")
+                # Use the better distance
+                distance = alt_distance2
+        
+        # Calculate bearing to target and heading error
+        bearing_deg = self._calculate_bearing(y, x, current_point[0], current_point[1])
+        heading_error_deg = bearing_deg - current_heading_deg
+        
+        # Normalize heading error to -180 to +180
+        heading_error_deg = ((heading_error_deg + 180) % 360) - 180
+        heading_error = np.radians(heading_error_deg)
+        
+        # Calculate cross-track error
+        cte = self._calculate_cross_track_error(x, y, yaw)
+        
+        # Calculate steering angle using Stanley controller formula
+        # 1. Heading term
+        heading_term = self.k * heading_error
+        
+        # 2. Cross-track error term (avoid division by zero)
+        if v > 0.1:  # Only apply CTE term when moving
+            cte_term = np.arctan2(self.k_e * cte, v)
+        else:
+            cte_term = 0
+        
+        # 3. Combine terms
+        delta = heading_term + cte_term
+        
+        # Apply steering limits
+        delta = np.clip(delta, -self.max_steer, self.max_steer)
+        
+        # Apply smoothing filter
+        if hasattr(self, 'prev_delta'):
+            delta = 0.7 * delta + 0.3 * self.prev_delta
+        self.prev_delta = delta
+        
+        # Return steering angle, target index, distance to waypoint, CTE, and heading error
+        return delta, self.target_idx, distance, cte, heading_error
+
+    def _find_target_waypoint(self, x, y, current_idx):
+        """Find the target waypoint to follow"""
+        # If we're at the start, find the closest waypoint
+        if current_idx == 0:
+            min_distance = float('inf')
+            closest_idx = 0
+            
+            for i in range(len(self.waypoints)):
+                waypoint = self.waypoints[i]
+                distance = self.haversine_distance((y, x), (waypoint[0], waypoint[1]))
+                
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_idx = i
+            
+            return closest_idx
+        
+        # Otherwise, check if we've reached the current waypoint
+        current_waypoint = self.waypoints[current_idx]
+        distance = self.haversine_distance((y, x), (current_waypoint[0], current_waypoint[1]))
+        
+        if distance < self.waypoint_reach_threshold:
+            # Move to next waypoint if available
+            if current_idx < len(self.waypoints) - 1:
+                return current_idx + 1
+        
+        # Stay on current waypoint
+        return current_idx
+
+    def _calculate_cross_track_error(self, x, y, yaw):
+        """Calculate cross track error using the geodesic approach"""
+        if self.target_idx == 0 or len(self.waypoints) < 2:
+            return 0.0
+            
+        # Get previous and current waypoints to define the line segment
+        prev_idx = max(0, self.target_idx - 1)
+        prev_point = self.waypoints[prev_idx]
+        current_point = self.waypoints[self.target_idx]
+        
+        # Important: Extract coordinates consistently!
+        # Waypoints are stored as [lat, lon]
+        prev_lat, prev_lon = prev_point[0], prev_point[1]
+        curr_lat, curr_lon = current_point[0], current_point[1]
+        
+        # Current position is passed as (x=lon, y=lat)
+        curr_pos_lat, curr_pos_lon = y, x
+        
+        try:
+            # Convert lat/lon to Cartesian coordinates (approximate)
+            # This is simplistic but works for small distances
+            REF_LAT = prev_lat  # Use the previous waypoint as reference
+            meters_per_lat = 111320  # Approx meters per degree of latitude
+            meters_per_lon = 111320 * math.cos(math.radians(REF_LAT))  # Varies with latitude
+            
+            # Convert to meters from reference point
+            prev_y = 0
+            prev_x = 0
+            curr_y = (curr_lat - prev_lat) * meters_per_lat
+            curr_x = (curr_lon - prev_lon) * meters_per_lon
+            pos_y = (curr_pos_lat - prev_lat) * meters_per_lat
+            pos_x = (curr_pos_lon - prev_lon) * meters_per_lon
+            
+            # Create line and point in Cartesian space
+            path_line = LineString([(prev_x, prev_y), (curr_x, curr_y)])
+            pos_point = Point(pos_x, pos_y)
+            
+            # Find nearest point on line
+            nearest_point = path_line.interpolate(path_line.project(pos_point))
+            nearest_x, nearest_y = nearest_point.x, nearest_point.y
+            
+            # Convert back to lat/lon
+            nearest_lat = prev_lat + (nearest_y / meters_per_lat)
+            nearest_lon = prev_lon + (nearest_x / meters_per_lon)
+            
+            # Calculate CTE as the distance in meters
+            cte_distance = self.haversine_distance(
+                (curr_pos_lat, curr_pos_lon), 
+                (nearest_lat, nearest_lon)
+            )
+            
+            # Determine the sign of the CTE
+            # Calculate the bearing from prev to current waypoint
+            path_bearing = self._calculate_bearing(prev_lat, prev_lon, curr_lat, curr_lon)
+            # Calculate bearing to the position point
+            pos_bearing = self._calculate_bearing(prev_lat, prev_lon, curr_pos_lat, curr_pos_lon)
+            
+            # Calculate the difference and determine if point is left or right of path
+            bearing_diff = ((pos_bearing - path_bearing + 180) % 360) - 180
+            
+            # Set the sign of the CTE
+            cte = cte_distance * (1 if bearing_diff > 0 else -1)
+            
+            # Debug output if the value is unreasonably large
+            if abs(cte) > 1000:
+                logger.error(f"LARGE CTE! {cte:.2f}m - Replacing with reasonable value")
+                cte = 0.0  # Default to safer value in case of error
+                
+            return cte
+            
+        except Exception as e:
+            # If anything goes wrong, fall back to a simpler calculation
+            logger.error(f"Error in CTE calculation: {e}")
+            
+            # Simple fallback - just use distance to line with no sign
+            # This isn't directionally correct but better than a huge error
+            cte_distance = self.haversine_distance(
+                (curr_pos_lat, curr_pos_lon),
+                (curr_lat, curr_lon)
+            )
+            return min(cte_distance, 10.0)  # Cap at 10m to avoid extreme values
+
+    def add_extension_waypoint(self, extension_distance):
+        """
+        Add an additional waypoint beyond the final waypoint in the current path.
+        This helps the controller to maintain direction after reaching the final waypoint.
+        
+        Args:
+            extension_distance: Distance in meters to extend beyond the last waypoint
+            
+        Returns:
+            The updated waypoints list
+        """
+        logger.info(f"Adding extension waypoint {extension_distance}m beyond final waypoint")
+        
+        if len(self.waypoints) < 2:
+            logger.warning("Cannot add extension waypoint: Need at least 2 waypoints")
+            return self.waypoints
+        
+        # Get the last two waypoints to determine the direction
+        last_wp = self.waypoints[-1]
+        second_last_wp = self.waypoints[-2]
+        
+        # Extract coordinates
+        last_lat, last_lon = last_wp
+        second_last_lat, second_last_lon = second_last_wp
+        
+        # Calculate bearing from second-to-last to last waypoint
+        bearing_rad = math.radians(self._calculate_bearing(
+            second_last_lat, second_last_lon, 
+            last_lat, last_lon
+        ))
+        
+        # Convert extension distance to degrees (approximate)
+        # 111,320 meters per degree of latitude (approximate at most locations)
+        lat_extension = extension_distance * math.cos(bearing_rad) / 111320
+        # Longitude conversion varies with latitude
+        lon_extension = extension_distance * math.sin(bearing_rad) / (111320 * math.cos(math.radians(last_lat)))
+        
+        # Calculate new waypoint coordinates
+        new_lat = last_lat + lat_extension
+        new_lon = last_lon + lon_extension
+        
+        # Add the new waypoint
+        new_waypoints = np.append(self.waypoints, [[new_lat, new_lon]], axis=0)
+        
+        # Replace the waypoints in the controller
+        self.waypoints = new_waypoints
+        
+        logger.info(f"Extension waypoint added at ({new_lat:.6f}, {new_lon:.6f})")
+        
+        return new_waypoints
+
+def run_gps_test(waypoints_file, config=None):
+    """Test GPS readings and bearing calculations"""
+    try:
+        # Load waypoints
+        all_waypoints = load_waypoints(waypoints_file)
+        
+        # Initialize GPS
+        gps = GPSMonitor()
+        
+        # Set up variables for tracking position
+        initial_lat = None
+        initial_lon = None
+        last_lat = None
+        last_lon = None
+        positions = []
+        total_distance = 0.0
+        
+        # Constants
+        update_interval = 1.0  # Update every 1 second
+        last_update_time = 0
+        
+        logger.info("Starting GPS test. Press Ctrl+C to exit.")
+        
+        while True:
+            current_time = time.time()
+            
+            # Check if it's time to update
+            if current_time - last_update_time >= update_interval:
+                last_update_time = current_time
+                
+                # Get GPS data
+                lat, lon, heading, speed = gps.get_position_and_heading()
+                
+                if lat is None or lon is None:
+                    logger.warning("GPS position unavailable")
+                    continue
+                
+                # Store position for movement tracking (max 10 recent positions)
+                positions.append((lat, lon, current_time))
+                if len(positions) > 10:
+                    positions.pop(0)
+                
+                # Set initial position if not set
+                if initial_lat is None:
+                    initial_lat = lat
+                    initial_lon = lon
+                    logger.info(f"Initial position: {lat:.6f}, {lon:.6f}")
+                
+                # Calculate distance from start (if we have initial position)
+                if initial_lat is not None and initial_lon is not None:
+                    from_start = geodesic((initial_lat, initial_lon), (lat, lon)).meters
+                    logger.info(f"Distance from start: {from_start:.1f}m")
+                
+                # Calculate distance from last point (if we have a previous position)
+                if last_lat is not None and last_lon is not None:
+                    from_last = geodesic((last_lat, last_lon), (lat, lon)).meters
+                    total_distance += from_last
+                    logger.info(f"Distance from last point: {from_last:.1f}m")
+                    logger.info(f"Total distance traveled: {total_distance:.1f}m")
+                
+                # Update last position
+                last_lat, last_lon = lat, lon
+                
+                # Calculate heading to each waypoint
+                # Only do this if we have a valid heading
+                if heading is not None:
+                    logger.info(f"Current heading: {heading:.1f}°")
+                    logger.info("All Waypoints:")
+                    for i, wp in enumerate(all_waypoints):
+                        wp_lat, wp_lon = wp
+                        dist = geodesic((lat, lon), (wp_lat, wp_lon)).meters
+                        bear = _calculate_bearing(lat, lon, wp_lat, wp_lon)
+                        
+                        # Calculate heading difference
+                        heading_diff = ((bear - heading + 180) % 360) - 180
+                        
+                        logger.info(f"WP {i}: {dist:.1f}m at {bear:.1f}° (error: {'+' if heading_diff > 0 else ''}{heading_diff:.1f}°)")
+                else:
+                    logger.warning("GPS heading unavailable - waiting for valid heading")
+            
+            # Small delay to prevent CPU hogging
+            time.sleep(0.1)
+            
+    except KeyboardInterrupt:
+        logger.info("GPS test stopped by user")
+    except Exception as e:
+        logger.error(f"Error in GPS test: {e}")
+        logger.error(traceback.format_exc())
+
+def main():
+    """Test function for the controller"""
+    with open('data/polygon_data.json') as f:
+        polygon_data = json.load(f)
+    
+    waypoints = np.array([(point['lat'], point['lon']) for point in polygon_data])
+    controller = StanleyController(waypoints)
+    
+    controller.control_loop()
+
+if __name__ == "__main__":
+    main()

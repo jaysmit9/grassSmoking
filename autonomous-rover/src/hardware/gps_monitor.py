@@ -12,7 +12,6 @@ import json
 # Configure logging
 logger = logging.getLogger("rover.hardware.gpsd")
 
-<<<<<<< HEAD
 class GPSMonitor:
     def __init__(self, main_port='/dev/ttyACM0', secondary_port='/dev/ttyACM1', 
                  baud_rate=115200, timeout=0.1, use_dual_gps=True, simulation_mode=False):
@@ -153,7 +152,6 @@ class GPSMonitor:
                     
             except Exception as e:
                 logger.error(f"GPS reader thread error: {e}")
-=======
 class GpsdClient:
     """Client for connecting to and reading from GPSD daemon"""
     
@@ -500,7 +498,6 @@ class GPSMonitor:
         # Start simulation if needed
         if self.simulation_mode:
             self._start_simulation()
->>>>>>> gpsd-refactor
         
         # Initialize last status update time
         self._last_status_log = 0
@@ -696,7 +693,6 @@ class GPSMonitor:
         )
         self.sim_thread.start()
     
-<<<<<<< HEAD
     def _simulate_gps_updates(self):
         """Simulate GPS updates based on speed and steering angle"""
         while self.simulation_running:
@@ -732,7 +728,6 @@ class GPSMonitor:
                 
             except Exception as e:
                 logger.error(f"Error in GPS simulation: {e}")
-=======
     def _sim_thread_function(self):
         """Run GPS simulation updates"""
         # Constants for simulation
@@ -825,7 +820,6 @@ class GPSMonitor:
                 
         except Exception as e:
             logger.error(f"Error in GPS simulation: {e}")
->>>>>>> gpsd-refactor
     
     def _log_gps_status(self):
         """Log GPS status for debugging"""
@@ -848,7 +842,6 @@ class GPSMonitor:
         logger.debug("=================")
     
     def get_position_and_heading(self):
-<<<<<<< HEAD
         """Get current position and heading (lat, lon, heading_deg, speed)"""
         if self.simulation_mode:
             # In simulation mode, just return simulation state
@@ -1017,7 +1010,6 @@ def _add_simulation_diagnostics():
 # For testing
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-=======
         """Get the current position (lat, lon) and heading from the GPS devices"""
         # In simulation mode, return simulated data
         if self.simulation_mode:
@@ -1120,7 +1112,6 @@ if __name__ == "__main__":
         }
         
         return precision
->>>>>>> gpsd-refactor
     
     def get_fix_quality(self):
         """Get the fix quality (0-9) for each GPS"""
@@ -1218,7 +1209,6 @@ if __name__ == "__main__":
         # Print GPS data in a loop
         print("Monitoring GPS data. Press Ctrl+C to exit.")
         while True:
-<<<<<<< HEAD
             lat, lon, heading_rad, speed = gps.get_position_and_heading()
             
             # CRITICAL FIX: Convert heading from radians to degrees
@@ -1238,7 +1228,6 @@ if __name__ == "__main__":
                 if all(p is not None for p in [front_lat, front_lon, rear_lat, rear_lon]):
                     direct_heading = gps._calculate_bearing(rear_lat, rear_lon, front_lat, front_lon)
                     print(f"DEBUG - DIRECT: Rear to Front heading: {direct_heading:.1f}°")
-=======
             lat, lon, heading, speed = gps.get_position_and_heading()
             precision = gps.get_gps_precision()
             fix_quality = gps.get_fix_quality()
@@ -1254,7 +1243,6 @@ if __name__ == "__main__":
                 print(f"GPS Separation: {distance:.3f}m")
             print(f"Precision (m): Front H±{precision['front']['horizontal']:.3f} V±{precision['front']['vertical']:.3f}")
             print("=================")
->>>>>>> gpsd-refactor
             
             time.sleep(1)
             

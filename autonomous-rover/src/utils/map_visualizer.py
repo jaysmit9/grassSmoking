@@ -125,15 +125,30 @@ class MapVisualizer:
         center_lon = np.mean([wp[1] for wp in self.waypoints])
         
         # Create map
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=20)
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=19)
         
-        # Add waypoints
+        # Add zoom control
+        folium.map.FitBounds(self.waypoints).add_to(m)
+
+        # Add fullscreen control
+        from folium.plugins import Fullscreen
+        Fullscreen().add_to(m)
+
+        # Add measure tool
+        from folium.plugins import MeasureControl
+        m.add_child(MeasureControl())
+        
+        # Create a feature group for waypoints to keep them separate
+        waypoints_group = folium.FeatureGroup(name="Waypoints")
+        m.add_child(waypoints_group)
+        
+        # Add waypoints to their own group
         for i, (lat, lon) in enumerate(self.waypoints):
             folium.Marker(
                 [lat, lon],
                 popup=f"Waypoint {i}",
                 icon=folium.Icon(color="blue", icon="flag"),
-            ).add_to(m)
+            ).add_to(waypoints_group)
             
         # Connect waypoints with a line
         folium.PolyLine(
@@ -141,14 +156,13 @@ class MapVisualizer:
             color="blue",
             weight=2.5,
             opacity=0.8,
-        ).add_to(m)
+        ).add_to(waypoints_group)
         
-        # Add rover marker (will be updated by JavaScript)
-        folium.Marker(
-            [self.waypoints[0][0], self.waypoints[0][1]],
-            popup="Rover",
-            icon=folium.Icon(color="red", icon="car", prefix='fa'),
-        ).add_to(m)
+        # IMPORTANT: Remove the static rover marker
+        # The dynamic one will be added by JavaScript
+        
+        # Add layers control so user can toggle waypoints if needed
+        folium.LayerControl().add_to(m)
         
         # Add info panel for waypoint distances and headings (will be updated by JavaScript)
         info_panel = """
@@ -176,160 +190,121 @@ class MapVisualizer:
         # Add JavaScript to periodically update the rover position and info panel
         import json
         js_template = """
-        <script>
-        var roverMarker = null;
-        var headingLine = null;
-        
-        // Haversine formula to calculate distance between points
-        function haversineDistance(lat1, lon1, lat2, lon2) {
-            function toRad(x) {
-                return x * Math.PI / 180;
+<script type="text/javascript">
+// Global variables for map components
+var roverMarker = null;
+var roverLabel = null;  // Store label reference separately
+var headingLine = null;
+var waypoints = WAYPOINTS_JSON_PLACEHOLDER;
+var mapFound = false;
+var initAttempts = 0;
+
+// More comprehensive map finder
+function findMap() {
+    console.log("Finding map, attempt " + (++initAttempts));
+    
+    // Method 1: Direct DOM query
+    var mapContainers = document.querySelectorAll('.folium-map, #map, .leaflet-container');
+    for (var i = 0; i < mapContainers.length; i++) {
+        if (mapContainers[i]._leaflet_map) {
+            console.log("Found map via DOM selector");
+            return mapContainers[i]._leaflet_map;
+        }
+    }
+    
+    // Method 2: Search in window object
+    for (var key in window) {
+        if (window[key] && 
+            typeof window[key] === 'object' && 
+            window[key].getContainer && 
+            typeof window[key].addLayer === 'function') {
+            console.log("Found map in window object:", key);
+            return window[key];
+        }
+    }
+    
+    // Method 3: Look for any element with _leaflet properties
+    var allElements = document.getElementsByTagName('*');
+    for (var i = 0; i < allElements.length; i++) {
+        if (allElements[i]._leaflet_id || allElements[i]._leaflet_map) {
+            console.log("Found leaflet element:", allElements[i]);
+            return allElements[i]._leaflet_map || window.L.map(allElements[i]);
+        }
+    }
+    
+    console.log("Map not found");
+    return null;
+}
+
+function updatePosition() {
+    // Try to find the map if we haven't already
+    var map = findMap();
+    
+    if (!map) {
+        if (initAttempts > 20) {
+            console.error("Failed to find map after " + initAttempts + " attempts");
+            alert("Map initialization failed. Try reloading the page.");
+            return;
+        }
+        setTimeout(updatePosition, 500);
+        return;
+    }
+    
+    // Only log once when map is found
+    if (!mapFound) {
+        console.log("Map found successfully!");
+        mapFound = true;
+    }
+
+    fetch('current_position.json?' + new Date().getTime())
+        .then(response => response.json())
+        .then(data => {
+            console.log("Position update received:", data);
+            var latlng = [data.lat, data.lon];
+            
+            // Create or update rover marker
+            if (!roverMarker) {
+                console.log("Creating rover marker at:", latlng);
+                
+                // Create a simple, reliable marker first
+                roverMarker = L.marker(latlng, {
+                    icon: L.icon({
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                        iconSize: [25, 41],
+                        iconAnchor: [12, 41]
+                    })
+                }).addTo(map);
+                
+                // Auto-center on marker when first found
+                map.setView(latlng, 19);
+                
+                console.log("Rover marker created successfully");
+            } else {
+                roverMarker.setLatLng(latlng);
             }
             
-            var R = 6371; // Earth's radius in km
-            var dLat = toRad(lat2 - lat1);
-            var dLon = toRad(lat2 - lat1);
-            var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
-                    Math.sin(dLon/2) * Math.sin(dLon/2);
-            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            var d = R * c;
-            return d * 1000; // Convert to meters
-        }
-        
-        // Calculate bearing between two points
-        function calculateBearing(lat1, lon1, lat2, lon2) {
-            function toRad(x) {
-                return x * Math.PI / 180;
-            }
+            // Add popup with info
+            var popupContent = "ROVER<br>Heading: " + data.heading.toFixed(1) + "°<br>" +
+                              "Position: " + data.lat.toFixed(6) + ", " + data.lon.toFixed(6);
+            roverMarker.bindPopup(popupContent);
             
-            // Convert to radians
-            var lat1Rad = toRad(lat1);
-            var lon1Rad = toRad(lon1);
-            var lat2Rad = toRad(lat2);
-            var lon2Rad = toRad(lon2);
-            
-            // Calculate bearing (EXACT SAME ALGORITHM as GPS monitor)
-            var dlon = lon2Rad - lon1Rad;
-            var y = Math.sin(dlon) * Math.cos(lat2Rad);
-            var x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - 
-                    Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dlon);
-            var bearing = Math.atan2(y, x);
-            
-            // Convert to degrees and normalize to 0-360
-            var bearingDeg = bearing * 180 / Math.PI;
-            bearingDeg = (bearingDeg + 360) % 360;
-            
-            return bearingDeg;
-        }
-        
-        // Calculate relative bearing (difference from current heading)
-        function calculateRelativeBearing(currentHeading, targetBearing) {
-            var diff = targetBearing - currentHeading;
-            // Normalize to -180 to 180
-            return ((diff + 180) % 360) - 180;
-        }
-        
-        // Waypoint coordinates
-        var waypoints = WAYPOINTS_JSON_PLACEHOLDER;
-        
-        function updateInfoPanel(roverLat, roverLon, heading, targetIdx) {
-            var infoHtml = '<table style="width:100%"><tr><th>WP</th><th>Dist (m)</th><th>Heading</th><th>Turn</th></tr>';
-            
-            waypoints.forEach(function(waypoint, idx) {
-                var wpLat = waypoint[0];
-                var wpLon = waypoint[1];
-                
-                // Calculate distance
-                var distance = haversineDistance(roverLat, roverLon, wpLat, wpLon);
-                
-                // Calculate bearing to waypoint
-                var bearing = calculateBearing(roverLat, roverLon, wpLat, wpLon);
-                
-                // Calculate relative bearing (how much to turn)
-                var relativeBearing = calculateRelativeBearing(heading, bearing);
-                
-                // Determine turn direction
-                var turnDirection = relativeBearing > 0 ? "→" : relativeBearing < 0 ? "←" : "↑";
-                
-                // Highlight current target waypoint
-                var style = (idx === targetIdx) ? 'background-color: #ffff99;' : '';
-                
-                infoHtml += '<tr style="' + style + '">' +
-                           '<td>' + idx + '</td>' +
-                           '<td>' + distance.toFixed(1) + '</td>' +
-                           '<td>' + bearing.toFixed(1) + '°</td>' +
-                           '<td>' + turnDirection + ' ' + Math.abs(relativeBearing).toFixed(1) + '°</td>' +
-                           '</tr>';
-            });
-            
-            infoHtml += '</table>';
-            document.getElementById('waypoint-info').innerHTML = infoHtml;
-        }
-        
-        function updatePosition() {
-            fetch('current_position.json')
-                .then(response => response.json())
-                .then(data => {
-                    var latlng = [data.lat, data.lon];
-                    
-                    // Update or create rover marker
-                    if (!roverMarker) {
-                        roverMarker = L.marker(latlng, {
-                            icon: L.divIcon({
-                                html: '<div style="color: white; background-color: red; width: 20px; height: 20px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transform: rotate(' + (data.heading - 90) + 'deg)">⬆</div>',
-                                className: 'rover-marker',
-                                iconSize: [20, 20]
-                            })
-                        }).addTo(map);
-                    } else {
-                        roverMarker.setLatLng(latlng);
-                        roverMarker.setIcon(L.divIcon({
-                            html: '<div style="color: white; background-color: red; width: 20px; height: 20px; border-radius: 50%; display: flex; justify-content: center; align-items: center; transform: rotate(' + (data.heading - 90) + 'deg)">⬆</div>',
-                            className: 'rover-marker',
-                            iconSize: [20, 20]
-                        }));
-                    }
-                    
-                    roverMarker.bindPopup("Current Heading: " + data.heading.toFixed(1) + "°<br>Target: WP " + data.target_idx);
-                    
-                    // Update info panel with distances and headings
-                    updateInfoPanel(data.lat, data.lon, data.heading, data.target_idx);
-                    
-                    // Draw heading line
-                    if (headingLine) {
-                        map.removeLayer(headingLine);
-                    }
-                    
-                    // Convert heading to radians and calculate end point
-                    var headingRad = data.heading * Math.PI / 180;
-                    var length = 0.00005; // adjust for visible line length
-
-                    // Correct calculation for heading line endpoint
-                    // Note: Longitude changes with cosine of heading, latitude with sine
-                    var endLat = data.lat + Math.cos(headingRad) * length;
-                    var endLng = data.lon + Math.sin(headingRad) * length;
-
-                    headingLine = L.polyline([latlng, [endLat, endLng]], {
-                        color: 'red',
-                        weight: 2
-                    }).addTo(map);
-                    
-                    // Update every 0.5 seconds
-                    setTimeout(updatePosition, 500);
-                })
-                .catch(error => {
-                    console.error('Error fetching position:', error);
-                    setTimeout(updatePosition, 2000); // Retry after 2 seconds on error
-                });
-        }
-        
-        // Start position updates when the map is ready
-        map.whenReady(function() {
-            setTimeout(updatePosition, 100);
+            // Continue update loop
+            setTimeout(updatePosition, 500);
+        })
+        .catch(error => {
+            console.error("Error fetching position:", error);
+            setTimeout(updatePosition, 2000);
         });
-        </script>
-        """
+}
+
+// Start the initialization process
+document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOM loaded, starting map detection process");
+    setTimeout(updatePosition, 1000);
+});
+</script>
+"""
         
         # Replace the waypoints placeholder with the actual JSON data
         js = js_template.replace('WAYPOINTS_JSON_PLACEHOLDER', json.dumps(self.waypoints))

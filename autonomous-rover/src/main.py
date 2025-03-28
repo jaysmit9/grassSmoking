@@ -1,33 +1,20 @@
+#!/usr/bin/env python3
+import argparse
+import numpy as np
+import json
+import time
 import sys
 import os
-<<<<<<< HEAD
-from datetime import datetime  # Add this if it's missing
-=======
 from datetime import datetime
 import logging
 import traceback
 from geopy.distance import geodesic  # Add this import for geodesic calculations
->>>>>>> gpsd-refactor
 
-from geopy.distance import geodesic  # Add this import for the GPS test function
-
-# Add the project root to Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-# Use absolute imports
-import numpy as np
-import time
-import json
-import logging
-import argparse
-import traceback
-from src.hardware.gps_monitor import GPSMonitor
-from src.hardware.motor_controller import MotorController
-from src.controllers.stanley_controller import StanleyController
-from geopy.distance import geodesic  # Add this import for the GPS test function
+# Import Stanley controller components
+from controllers.stanley_controller import StanleyController
 
 # Import hardware components
-from hardware.gps_monitor_serial import GPSMonitor  # Changed to use the GPSD version
+from hardware.gps_monitor_api import GPSMonitor  # Changed to use the GPSD version
 # Remove the import that's causing the error
 # from hardware.gps_monitor import initialize_gps_with_retry
 
@@ -148,25 +135,12 @@ def load_waypoints(waypoints_file):
         logger.error(traceback.format_exc())
         return np.array([])  # Return empty array on error
 
-def run_simulation(waypoints_file, config=None, k=None, k_e=None, max_speed=None, turn_factor=None, animate=False):
-    """Run a simulation with the Stanley controller"""
+def run_simulation(waypoints_file, config=None):
+    """Run the rover in simulation mode"""
+    if not MATPLOTLIB_AVAILABLE:
+        logger.error("Matplotlib is required for simulation mode")
+        return
     
-<<<<<<< HEAD
-    # Set up default config if none provided
-    if not config:
-        config = {
-            'k': 0.2 if k is None else k,               # Heading error gain
-            'k_e': 0.1 if k_e is None else k_e,            # CRITICAL: Reduce Cross-track error gain from 1.0 to 0.2
-            'dt': 0.1,              # Update rate
-            'L': 1.0,               # Wheelbase
-            'max_steer': np.radians(50),  # Maximum steering angle
-            'target_speed': 0.5,    # Target speed (m/s)
-            'extension_distance': 1.0,  # Extension distance
-            'waypoint_reach_threshold': 1.0,  # Increased to 3m
-            'update_rate': 10.0,     # Hz
-            'max_speed': 0.3 if max_speed is None else max_speed,
-            'turn_factor': 0.9 if turn_factor is None else turn_factor
-=======
     # Default configuration updated for tanh-based controller
     if config is None:
         config = {
@@ -176,25 +150,11 @@ def run_simulation(waypoints_file, config=None, k=None, k_e=None, max_speed=None
             'extension_distance': 1.0,      # Extension distance beyond final waypoint
             'waypoint_reach_threshold': 1.5, # Distance threshold to consider waypoint reached
             'steering_sensitivity': np.pi/36  # Denominator for tanh function (lower = more aggressive)
->>>>>>> gpsd-refactor
         }
     
     # Load waypoints
     waypoints = load_waypoints(waypoints_file)
     
-<<<<<<< HEAD
-    # Create controller (PURE ALGORITHM - NO HARDWARE)
-    controller = StanleyController(waypoints, 
-                                  k=config['k'], 
-                                  k_e=config['k_e'],
-                                  L=config['L'],
-                                  max_steer=config['max_steer'],
-                                  waypoint_reach_threshold=config['waypoint_reach_threshold'])
-    
-    # Create hardware interfaces SEPARATELY
-    gps = GPSMonitor(simulation_mode=True)
-    motors = MotorController(max_speed=config['max_speed'], turn_factor=config['turn_factor'], simulation_mode=True)  # Pass simulation_mode=True
-=======
     # Initialize the controller with new parameters
     controller = StanleyController(
         waypoints=waypoints,
@@ -211,167 +171,21 @@ def run_simulation(waypoints_file, config=None, k=None, k_e=None, max_speed=None
     x = waypoints[0, 0]  # Initial latitude
     y = waypoints[0, 1]  # Initial longitude
     v = 0.0              # Initial velocity
->>>>>>> gpsd-refactor
     
-    # Main simulation loop
-    try:
-        update_interval = 1.0 / config['update_rate']
-        last_update_time = time.time()
-        simulation_complete = False
-        
-        # Initialize lists to store trajectory data
-        x_values = []
-        y_values = []
-        
-        while not simulation_complete:
-            current_time = time.time()
-            
-            # Check if it's time for an update
-            if current_time - last_update_time >= update_interval:
-                last_update_time = current_time
-                
-                # Get current position - FROM GPS, NOT CONTROLLER
-                x, y, yaw, v = gps.get_position_and_heading()
-                
-                # Add this diagnostic logging
-                heading_deg = np.degrees(yaw) % 360
-                logger.info(f"Current heading: {heading_deg:.1f}° (raw: {np.degrees(yaw):.1f}°)")
-
-                # For simulation, use fixed speed 
-                v = config['target_speed']
-                
-                # Call pure controller with current position
-                delta, target_idx, distance, cte, yaw_error = controller.stanley_control(x, y, yaw, v)
-                
-                # Get bearing to target waypoint
-                target_waypoint = controller.waypoints[target_idx]
-                bearing = controller._calculate_bearing(x, y, target_waypoint[0], target_waypoint[1])
-                
-                # Add waypoint number and bearing to console output
-                logger.info(f"Heading towards waypoint {target_idx + 1}/{len(waypoints)}, bearing: {bearing:.1f}°")
-                
-                # Apply to hardware/simulation
-                motors.set_steering(np.degrees(delta))
-                motors.set_speed(v)
-                
-                # Update simulation
-                gps.update_simulation(delta, v)
-                
-                # Store trajectory data
-                x_values.append(x)
-                y_values.append(y)
-                
-                # CRITICAL ADDITION: Check if we've reached the final waypoint
-                if target_idx == len(waypoints) - 1 and distance < config['waypoint_reach_threshold']:
-                    logger.info("*** ALL WAYPOINTS REACHED! SIMULATION COMPLETE ***")
-                    simulation_complete = True
-                    break
-            
-            # Small delay to prevent CPU hogging
-            time.sleep(0.01)
-        
-        # Simulation completed successfully
-        print("\n=============================================")
-        print("🏁 SIMULATION SUCCESSFULLY COMPLETED! 🏁")
-        print("All waypoints reached.")
-        print("=============================================\n")
-        
-        # Plot the trajectory
-        if MATPLOTLIB_AVAILABLE and animate:
-            plt.figure(figsize=(10, 6))
-            plt.plot(waypoints[:, 0], waypoints[:, 1], 'g.', label='Waypoints')
-            plt.plot(x_values, y_values, 'b-', label='Trajectory')
-            plt.xlabel('Latitude')
-            plt.ylabel('Longitude')
-            plt.title('Rover Simulation Trajectory')
-            plt.legend()
-            plt.grid(True)
-            plt.axis('equal')
-            plt.show()
-        
-    except KeyboardInterrupt:
-        print("\nSimulation stopped by user")
-        
-    finally:
-        motors.stop()
-        print("Simulation ended.")
-
-def run_hardware(waypoints_file, config=None, k=None, k_e=None, max_speed=None, turn_factor=None):
-    """Run the rover with the Stanley controller"""
-    # Set up default config if none provided
-    if not config:
-        config = {
-            'k': 0.2 if k is None else k,               # Heading error gain
-            'k_e': 0.1 if k_e is None else k_e,            # CRITICAL: Reduce Cross-track error gain from 1.0 to 0.2
-            'dt': 0.1,              # Update rate
-            'L': 1.0,               # Wheelbase
-            'max_steer': np.radians(50),  # Maximum steering angle
-            'target_speed': 0.5,    # Target speed (m/s)
-            'extension_distance': 1.0,  # Extension distance
-            'waypoint_reach_threshold': 1.0,  # Increased to 3m
-            'update_rate': 10.0,     # Hz
-            'max_speed': 0.2 if max_speed is None else max_speed,
-            'turn_factor': 0.9 if turn_factor is None else turn_factor
-        }
+    # Set initial yaw to face the first waypoint
+    dx = waypoints[1, 0] - x
+    dy = waypoints[1, 1] - y
+    yaw = np.arctan2(dy, dx)
     
-    # Load waypoints
-    waypoints = load_waypoints(waypoints_file)
+    # Constants for geographic coordinate conversion
+    METERS_PER_LAT_DEGREE = 111000
     
-    # Create controller (PURE ALGORITHM - NO HARDWARE)
-    controller = StanleyController(waypoints, 
-                                  k=config['k'], 
-                                  k_e=config['k_e'],
-                                  L=config['L'],
-                                  max_steer=config['max_steer'],
-                                  waypoint_reach_threshold=config['waypoint_reach_threshold'])
+    # Run simulation
+    logger.info("Starting simulation...")
     
-    # Create hardware interfaces SEPARATELY
-    gps = GPSMonitor(simulation_mode='--sim' in sys.argv)
-    motors = MotorController(max_speed=config['max_speed'], turn_factor=config['turn_factor'])
+    # Import simulation specific functions
+    from simulation.simulator import simulate, plot_results, create_animation
     
-<<<<<<< HEAD
-    # Main control loop
-    try:
-        update_interval = 1.0 / config['update_rate']
-        last_update_time = time.time()
-        
-        while True:
-            current_time = time.time()
-            
-            # Check if it's time for an update
-            if current_time - last_update_time >= update_interval:
-                last_update_time = current_time
-                
-                # Get current position - FROM GPS, NOT CONTROLLER
-                x, y, yaw, v = gps.get_position_and_heading()
-                
-                # For simulation, use fixed speed 
-                v = config['target_speed']
-                
-                # Call pure controller with current position
-                delta, target_idx, distance, cte, yaw_error = controller.stanley_control(x, y, yaw, v)
-                
-                # Get bearing to target waypoint
-                target_waypoint = controller.waypoints[target_idx]
-                bearing = controller._calculate_bearing(x, y, target_waypoint[0], target_waypoint[1])
-                
-                # Add waypoint number and bearing to console output
-                logger.info(f"Heading towards waypoint {target_idx + 1}/{len(waypoints)}, bearing: {bearing:.1f}°")
-                
-                # Apply to hardware/simulation
-                motors.set_steering(np.degrees(delta))
-                motors.set_speed(v)
-            
-            # Small delay to prevent CPU hogging
-            time.sleep(0.01)
-        
-    except KeyboardInterrupt:
-        print("\nSimulation stopped by user")
-        
-    finally:
-        motors.stop()
-        print("Simulation ended.")
-=======
     results = simulate(
         waypoints, x, y, yaw, v, 
         target_idx=1,  # Start with second waypoint as target
@@ -501,7 +315,6 @@ def run_hardware(waypoints_file, config=None, k=None, k_e=None, max_speed=None, 
         create_animation(results, waypoints)
     
     logger.info("Simulation completed")
->>>>>>> gpsd-refactor
 
 # Let's create a modified run_hardware function that uses the same patient approach as gps-test
 def run_hardware(waypoints_file, config=None):
@@ -518,39 +331,19 @@ def run_hardware(waypoints_file, config=None):
         }
     
     try:
-<<<<<<< HEAD
-        from src.hardware.gps_monitor import GPSMonitor
-        from src.hardware.motor_controller import MotorController
-    except ImportError as e:
-        logger.error(f"Failed to import hardware modules: {e}")
-        logger.error("Make sure the hardware modules are in the Python path")
-        return
-    
-    # Initialize hardware
-    try:
-        # Initialize GPS with simulation mode EXPLICITLY OFF
-        gps = GPSMonitor(simulation_mode=False)  # <-- Force hardware mode
-        motors = MotorController()
-=======
         # Load waypoints from file
         waypoints = load_waypoints(waypoints_file)
         if len(waypoints) < 2:
             logger.error("Not enough waypoints to navigate. Need at least 2.")
             return
->>>>>>> gpsd-refactor
         
         # Initialize GPS - single instance, same pattern as gps-test
         logger.info("Initializing GPS...")
         gps = GPSMonitor()  # Direct instantiation, no retry function
         
-<<<<<<< HEAD
-        # Constants for geographic coordinate conversion
-        METERS_PER_LAT_DEGREE = 1110000
-=======
         # Initialize motor controller after GPS
         motors = get_motor_controller(max_speed=config.get("speed", 0.3))
         logger.critical(f"MOTOR CONTROLLER MAX SPEED: {motors.max_speed}")
->>>>>>> gpsd-refactor
         
         # Initialize controller with shared GPS instance
         controller = StanleyController(
@@ -562,28 +355,11 @@ def run_hardware(waypoints_file, config=None):
             motor_controller=motors  # Pass the motors
         )
         
-<<<<<<< HEAD
-        # Add this at the beginning of the run_hardware control loop
-        # (after creating motors but before the control loop starts)
-        # This will help us see where set_speed is being called
-
-        # Monkey patch the set_speed method to add more detailed logging
-        original_set_speed = motors.set_speed
-
-        def set_speed_with_trace(speed):
-            stack = traceback.extract_stack()
-            caller = stack[-2]  # The function that called this one
-            logger.info(f"set_speed({speed}) called from {os.path.basename(caller.filename)}:{caller.lineno}")
-            return original_set_speed(speed)
-
-        motors.set_speed = set_speed_with_trace
-=======
         # ======== GPS PREFLIGHT CHECK ========
         logger.info("Performing GPS preflight check...")
         gps_ready = False
         max_wait_time = 30  # seconds
         start_time = time.time()
->>>>>>> gpsd-refactor
         
         # First check - see if we already have valid GPS data
         lat, lon, heading, speed = gps.get_position_and_heading()
@@ -618,54 +394,6 @@ def run_hardware(waypoints_file, config=None):
                     logger.info("✅ Rear GPS position acquired!")
                     rear_seen = True
                     
-<<<<<<< HEAD
-                    # NO CHANGE TO HEADING - this is critical
-                    x = lat
-                    y = lon
-                    yaw = np.radians(heading)  # Convert to radians without changing coordinate system
-                    v = speed
-                    
-                    # Get steering command from Stanley controller
-                    delta, target_idx, distance, cte, yaw_error = controller.stanley_control(x, y, yaw, v)
-                    
-                    # Limit steering angle
-                    delta = np.clip(delta, -config['max_steer'], config['max_steer'])
-                    
-                    # Adjust speed based on steering angle
-                    current_target_speed = config['target_speed']
-                    if abs(delta) > np.radians(30):
-                        current_target_speed *= 0.5  # Slow down for sharp turns
-                    elif abs(delta) > np.radians(15):
-                        current_target_speed *= 0.7  # Moderate speed for moderate turns
-
-                    # Apply steering and speed
-                    motors.set_steering(np.degrees(delta))
-                    motors.set_speed(current_target_speed)
-                    
-                    # Get motor status for logging
-                    motor_status = motors.get_status()
-                    
-                    # Enhanced logging with clear heading information
-                    logger.info(f"Pos: ({lat:.6f}, {lon:.6f}), Heading: {heading:.1f}°, "
-                                f"Target: {target_idx}/{len(waypoints)-1}, "
-                                f"Distance: {distance:.1f}m, CTE: {cte:.2f}m, "
-                                f"Heading Error: {np.degrees(yaw_error):.1f}°, "
-                                f"Steering: {np.degrees(delta):.1f}°")
-                    
-                    # Write to trajectory file
-                    trajectory_file.write(f"{current_time},{lat},{lon},{heading},"
-                                         f"{speed},{target_idx},{distance},{cte}\n")
-                    trajectory_file.flush()
-                    
-                    # Check if we've reached the final waypoint (which is the extension point)
-                    if target_idx == len(waypoints) - 1 and distance < config['waypoint_reach_threshold']:
-                        logger.info("✓✓ REACHED FINAL WAYPOINT")
-                        motors.stop()
-                        break
-                        
-                except Exception as e:
-                    logger.error(f"Error in control loop: {e}")
-=======
                 if heading_ok and not heading_seen:
                     logger.info("✅ Valid heading calculated!")
                     heading_seen = True
@@ -747,7 +475,6 @@ def run_hardware(waypoints_file, config=None):
                 # Check if mission is complete - already reached final waypoint
                 if mission_complete:
                     logger.info("Mission complete! Maintaining stopped position.")
->>>>>>> gpsd-refactor
                     motors.stop()
                     time.sleep(1)
                     continue
@@ -930,16 +657,6 @@ def run_gps_test(waypoints_file, config=None, test_position=None):
         test_position: Optional tuple (lat, lon) for testing with a fixed position
     """
     try:
-<<<<<<< HEAD
-        # Get GPS
-        from src.hardware.gps_monitor import GPSMonitor
-        gps = GPSMonitor(simulation_mode='--sim' in sys.argv)
-        
-        # Initialize motors but don't use them
-        from src.hardware.motor_controller import MotorController
-        motors = MotorController()
-        motors.set_speed(0)  # Ensure motors are stopped
-=======
         import math
         from geopy.distance import geodesic
         import json
@@ -966,7 +683,6 @@ def run_gps_test(waypoints_file, config=None, test_position=None):
         if not os.path.exists(waypoints_file):
             logger.error(f"Could not find waypoints file: {waypoints_file}")
             return
->>>>>>> gpsd-refactor
         
         # Load waypoints exactly as the map visualizer does
         logger.info(f"Loading waypoints from {waypoints_file}")
@@ -1375,7 +1091,7 @@ def main():
         sys.exit(1)
     elif args.sim:
         logger.info("Starting in SIMULATION mode")
-        run_simulation(args.waypoints, config, animate=args.animate)
+        run_simulation(args.waypoints, config)
     elif args.real:
         logger.info("Starting in REAL HARDWARE mode")
         run_hardware(args.waypoints, config)
